@@ -11,7 +11,7 @@ import CreditHistory from './components/CreditHistory';
 import Login from './components/Login';
 import AdminPanel from './components/AdminPanel';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
-import { LayoutDashboard, Plus, List, Sparkles, Menu, X, Wallet, CreditCard, ShieldCheck, LogOut, MessageCircle, Loader2, AlertTriangle } from 'lucide-react';
+import { LayoutDashboard, Plus, List, Sparkles, Menu, X, Wallet, CreditCard, ShieldCheck, LogOut, Loader2, AlertTriangle } from 'lucide-react';
 
 const ADMIN_EMAIL = 'digitalpersonal@gmail.com';
 
@@ -19,8 +19,10 @@ const App: React.FC = () => {
   const [session, setSession] = useState<any>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const fetchingRef = useRef<string | null>(null);
   
+  const isMounted = useRef(true);
+  const fetchController = useRef<AbortController | null>(null);
+
   // Data States
   const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -35,32 +37,37 @@ const App: React.FC = () => {
   const [expenseToEdit, setExpenseToEdit] = useState<Expense | null>(null);
 
   const fetchUsers = useCallback(async () => {
-    const { data } = await supabase.from('profiles').select('*');
-    if (data) {
-      setAllUsers(data.map(p => ({
-        id: p.id,
-        name: p.name || 'Usuário',
-        email: p.email || '',
-        password: '***',
-        role: p.role as 'ADMIN' | 'USER'
-      })));
+    if (!isSupabaseConfigured) return;
+    try {
+      const { data, error } = await supabase.from('profiles').select('*');
+      if (error) throw error;
+      if (data && isMounted.current) {
+        setAllUsers(data.map(p => ({
+          id: p.id,
+          name: p.name || 'Usuário',
+          email: p.email || '',
+          password: '***',
+          role: p.role as 'ADMIN' | 'USER'
+        })));
+      }
+    } catch (err) {
+      console.warn("Acesso negado à lista de usuários ou erro de rede.");
     }
   }, []);
 
   const fetchData = useCallback(async (userId: string, email: string) => {
-    if (!isSupabaseConfigured || fetchingRef.current === userId) return;
-    fetchingRef.current = userId;
+    if (!isSupabaseConfigured) return;
+    
+    // Abort previous requests if they are still running
+    if (fetchController.current) {
+      fetchController.current.abort();
+    }
+    fetchController.current = new AbortController();
+    
     setLoading(true);
 
     try {
-      const [
-        { data: exp },
-        { data: ear },
-        { data: km },
-        { data: cred },
-        { data: rec },
-        { data: prof }
-      ] = await Promise.all([
+      const results = await Promise.allSettled([
         supabase.from('expenses').select('*').eq('user_id', userId),
         supabase.from('earnings').select('*').eq('user_id', userId),
         supabase.from('daily_km').select('*').eq('user_id', userId),
@@ -69,37 +76,65 @@ const App: React.FC = () => {
         supabase.from('profiles').select('*').eq('id', userId).maybeSingle()
       ]);
 
-      if (exp) setExpenses(exp);
-      if (ear) setEarnings(ear);
-      if (km) setKmEntries(km);
-      if (cred) setCredits(cred);
-      if (rec) setRecurringExpenses(rec);
+      if (!isMounted.current) return;
 
-      const forcedRole = email === ADMIN_EMAIL ? 'ADMIN' : (prof?.role || 'USER');
+      const [exp, ear, km, cred, rec, profResult] = results;
 
-      if (prof) {
+      // Type-safe handling of PromiseSettledResult and fixing logic errors
+      // Use explicit status check and cast to access .value safely in TS
+      if (exp.status === 'fulfilled') {
+        const val = (exp as PromiseFulfilledResult<any>).value;
+        if (val?.data) setExpenses(val.data);
+      }
+      
+      if (ear.status === 'fulfilled') {
+        const val = (ear as PromiseFulfilledResult<any>).value;
+        if (val?.data) setEarnings(val.data);
+      }
+      
+      if (km.status === 'fulfilled') {
+        const val = (km as PromiseFulfilledResult<any>).value;
+        if (val?.data) setKmEntries(val.data);
+      }
+      
+      if (cred.status === 'fulfilled') {
+        const val = (cred as PromiseFulfilledResult<any>).value;
+        if (val?.data) setCredits(val.data);
+      }
+      
+      if (rec.status === 'fulfilled') {
+        const val = (rec as PromiseFulfilledResult<any>).value;
+        if (val?.data) setRecurringExpenses(val.data);
+      }
+
+      const forcedRole = email.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? 'ADMIN' : 
+                        (profResult.status === 'fulfilled' ? (profResult as PromiseFulfilledResult<any>).value.data?.role : 'USER');
+      
+      const profileData = profResult.status === 'fulfilled' ? (profResult as PromiseFulfilledResult<any>).value.data : null;
+
+      if (profileData) {
         setCurrentUser({
-          id: prof.id,
-          name: prof.name || 'Usuário',
+          id: profileData.id,
+          name: profileData.name || 'Usuário',
           email: email,
           password: '',
-          role: forcedRole
+          role: forcedRole as 'ADMIN' | 'USER'
         });
       } else {
         const { data: newProf } = await supabase.from('profiles').upsert({
           id: userId,
-          name: email.split('@')[0] || 'Motorista',
+          name: email.split('@')[0] || 'Usuário',
           role: forcedRole,
           email: email
         }).select().single();
         
-        if (newProf) {
+        if (newProf && isMounted.current) {
           setCurrentUser({
             id: newProf.id,
             name: newProf.name,
             email: email,
             password: '',
-            role: forcedRole
+            role: forcedRole as 'ADMIN' | 'USER'
           });
         }
       }
@@ -108,33 +143,52 @@ const App: React.FC = () => {
         fetchUsers();
       }
 
-    } catch (err) {
-      console.error("Erro ao carregar dados:", err);
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        console.error("Erro ao carregar dados:", err);
+      }
     } finally {
-      setLoading(false);
-      fetchingRef.current = null;
+      if (isMounted.current) {
+        setLoading(false);
+      }
     }
   }, [fetchUsers]);
 
   useEffect(() => {
-    if (!isSupabaseConfigured) {
-      setLoading(false);
-      return;
-    }
+    isMounted.current = true;
+    
+    const checkSession = async () => {
+      const { data: { session: activeSession } } = await supabase.auth.getSession();
+      if (isMounted.current) {
+        setSession(activeSession);
+        if (activeSession?.user) {
+          fetchData(activeSession.user.id, activeSession.user.email || '');
+        } else {
+          setLoading(false);
+        }
+      }
+    };
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      setSession(session);
-      if (session?.user) {
-        fetchData(session.user.id, session.user.email || '');
+    checkSession();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      if (!isMounted.current) return;
+      setSession(newSession);
+      if (newSession?.user) {
+        fetchData(newSession.user.id, newSession.user.email || '');
       } else {
         setCurrentUser(null);
-        setLoading(false);
         setExpenses([]);
         setEarnings([]);
+        setLoading(false);
       }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      isMounted.current = false;
+      if (fetchController.current) fetchController.current.abort();
+      subscription.unsubscribe();
+    };
   }, [fetchData]);
 
   const handleLogout = async () => {
@@ -145,8 +199,7 @@ const App: React.FC = () => {
   };
 
   const handleAddUser = async (user: User) => {
-    // Para criar novos usuários no Supabase via Admin, geralmente usa-se a Edge Function ou Admin Auth API.
-    // Aqui simularemos a inserção no perfil para controle visual.
+    if (currentUser?.role !== 'ADMIN') return;
     const { error } = await supabase.from('profiles').insert({
       id: user.id,
       name: user.name,
@@ -157,16 +210,17 @@ const App: React.FC = () => {
   };
 
   const handleDeleteUser = async (id: string) => {
+    if (currentUser?.role !== 'ADMIN') return;
     const { error } = await supabase.from('profiles').delete().eq('id', id);
     if (!error) fetchUsers();
   };
 
-  // ... (outras funções handleAddExpense, handleAddEarning, etc. permanecem iguais)
-  const handleAddExpense = async (exp: Expense, rec?: RecurringExpense) => {
+  const handleAddExpense = async (exp: Expense) => {
     if (!session?.user) return;
     const { id, ...expData } = exp;
     const isNew = exp.id.includes('-') && exp.id.length > 30;
     const payload = isNew ? { ...expData, user_id: session.user.id } : { ...exp, user_id: session.user.id };
+    
     const { data, error } = await supabase.from('expenses').upsert(payload).select().single();
     if (!error && data) {
       setExpenses(prev => [...prev.filter(e => e.id !== exp.id), data]);
@@ -216,21 +270,7 @@ const App: React.FC = () => {
     );
   }
 
-  if (!isSupabaseConfigured) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6 text-center">
-        <div className="max-w-md w-full bg-white p-8 rounded-3xl shadow-xl border border-amber-100">
-          <AlertTriangle size={48} className="text-amber-500 mx-auto mb-4" />
-          <h2 className="text-2xl font-black text-gray-800 mb-2">Erro de Conexão</h2>
-          <p className="text-gray-500 mb-6">Verifique as chaves do Supabase.</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!session) {
-    return <Login />;
-  }
+  if (!session) return <Login />;
 
   const NavButton: React.FC<{ target: ViewState; icon: React.ReactNode; label: string }> = ({ target, icon, label }) => (
     <button
@@ -251,20 +291,20 @@ const App: React.FC = () => {
           </div>
           
           <nav className="hidden md:flex space-x-2 items-center">
-            {currentUser?.role === 'ADMIN' && <NavButton target="ADMIN_PANEL" icon={<ShieldCheck size={18} />} label="Administração" />}
+            {currentUser?.role === 'ADMIN' && <NavButton target="ADMIN_PANEL" icon={<ShieldCheck size={18} />} label="Gestão" />}
             <NavButton target="DAILY_FLOW" icon={<Wallet size={18} />} label="Diário" />
             <NavButton target="DASHBOARD" icon={<LayoutDashboard size={18} />} label="Balanço" />
             <NavButton target="CREDIT_HISTORY" icon={<CreditCard size={18} />} label="Crédito" />
             <NavButton target="LIST" icon={<List size={18} />} label="Histórico" />
-            <NavButton target="AI_ADVISOR" icon={<Sparkles size={18} />} label="Consultor IA" />
+            <NavButton target="AI_ADVISOR" icon={<Sparkles size={18} />} label="IA" />
             <div className="h-8 w-px bg-gray-200 mx-2"></div>
-            <button onClick={handleLogout} className="p-3 text-gray-400 hover:text-red-600 rounded-xl transition" title="Sair">
+            <button onClick={handleLogout} className="p-3 text-gray-400 hover:text-red-600 rounded-xl transition">
                 <LogOut size={20} />
             </button>
           </nav>
 
           <div className="flex items-center gap-2 md:hidden">
-             <span className="text-xs font-bold text-gray-400 max-w-[100px] truncate">{currentUser?.name}</span>
+             <span className="text-xs font-bold text-blue-600">{currentUser?.role === 'ADMIN' ? 'ADMIN' : currentUser?.name}</span>
              <button className="p-2" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
                 {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
              </button>
@@ -280,7 +320,7 @@ const App: React.FC = () => {
            <NavButton target="CREDIT_HISTORY" icon={<CreditCard size={18} />} label="Dívidas e Crédito" />
            <NavButton target="LIST" icon={<List size={18} />} label="Histórico" />
            <NavButton target="AI_ADVISOR" icon={<Sparkles size={18} />} label="IA Driver" />
-           <button onClick={handleLogout} className="w-full flex items-center justify-center px-4 py-3 rounded-xl bg-red-50 text-red-600 font-bold transition mt-2">
+           <button onClick={handleLogout} className="w-full flex items-center justify-center px-4 py-3 rounded-xl bg-red-50 text-red-600 font-bold mt-2">
                <LogOut size={18} className="mr-2" /> Sair
            </button>
         </div>
@@ -297,9 +337,9 @@ const App: React.FC = () => {
           <AdminPanel users={allUsers} onAddUser={handleAddUser} onDeleteUser={handleDeleteUser} />
         )}
 
-        <footer className="mt-20 pt-10 border-t border-gray-200 pb-16 print:hidden">
+        <footer className="mt-20 pt-10 border-t border-gray-200 pb-16">
             <div className="text-center flex flex-col items-center justify-center space-y-1">
-                <p className="text-[10px] md:text-sm font-black text-gray-500 uppercase tracking-widest">Desenvolvido por Multiplus - Sistemas Inteligentes</p>
+                <p className="text-[10px] md:text-sm font-black text-gray-500 uppercase tracking-widest">Multiplus - Sistemas Inteligentes</p>
                 <p className="text-[10px] md:text-sm font-black text-gray-500 uppercase tracking-widest">Silvio T. de Sá Filho</p>
             </div>
         </footer>

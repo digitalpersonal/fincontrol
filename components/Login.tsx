@@ -3,6 +3,8 @@ import React, { useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Lock, Mail, LogIn, ShieldAlert, MessageCircle, Loader2, Eye, EyeOff, UserPlus } from 'lucide-react';
 
+const ADMIN_EMAIL = 'digitalpersonal@gmail.com'; // Definido como o e-mail do administrador master
+
 const Login: React.FC = () => {
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
@@ -18,30 +20,48 @@ const Login: React.FC = () => {
     setError(null);
     setSuccess(null);
     
-    if (isSignUp) {
-      const { error: signUpError } = await supabase.auth.signUp({
-        email,
-        password,
-      });
+    try {
+      if (isSignUp) {
+        // Apenas o e-mail do administrador master pode se cadastrar
+        if (email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+          setError("O cadastro de novos usuários é feito exclusivamente pelo administrador do sistema.");
+          return; // Impede o signup
+        }
 
-      if (signUpError) {
-        setError(signUpError.message);
-        setLoading(false);
+        const { error: signUpError } = await supabase.auth.signUp({
+          email,
+          password,
+        });
+
+        if (signUpError) {
+          if (signUpError.message.includes('User already registered')) {
+            setError('Conta de administrador já existe. Por favor, faça login.');
+          } else {
+            setError(signUpError.message);
+          }
+        } else {
+          setSuccess('Conta de administrador criada com sucesso! Por favor, faça login.');
+          setIsSignUp(false); // Redireciona para o login após o cadastro
+        }
       } else {
-        setSuccess('Conta criada com sucesso! Verifique seu e-mail ou tente fazer login.');
-        setIsSignUp(false);
-        setLoading(false);
-      }
-    } else {
-      const { error: authError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+        const { error: authError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
 
-      if (authError) {
-        setError(authError.message === 'Invalid login credentials' ? 'E-mail ou senha incorretos.' : authError.message);
-        setLoading(false);
+        if (authError) {
+          if (authError.message === 'Invalid login credentials') {
+            setError('E-mail ou senha incorretos. Verifique se sua conta foi cadastrada.');
+          } else {
+            setError(authError.message);
+          }
+        }
       }
+    } catch (err: any) {
+      setError('Ocorreu um erro inesperado. Tente novamente.');
+      console.error(err);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -59,7 +79,7 @@ const Login: React.FC = () => {
           </div>
           <h1 className="text-3xl font-black text-gray-800">FinControl<span className="text-blue-600">AI</span></h1>
           <p className="text-gray-500 mt-2 font-medium">
-            {isSignUp ? 'Crie sua conta administrativa' : 'Acesse seu painel financeiro'}
+            {isSignUp ? 'Cadastro para o Administrador Geral' : 'Acesse seu painel financeiro'}
           </p>
         </div>
 
@@ -70,6 +90,7 @@ const Login: React.FC = () => {
           >
             Entrar
           </button>
+          {/* A aba Cadastrar permanece visível para que o ADMIN_EMAIL possa se cadastrar inicialmente */}
           <button 
             onClick={() => { setIsSignUp(true); setError(null); setSuccess(null); }}
             className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition ${isSignUp ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
@@ -118,14 +139,14 @@ const Login: React.FC = () => {
 
           {error && (
             <div className="flex items-center gap-2 p-4 bg-red-50 text-red-600 rounded-2xl text-sm font-bold border border-red-100 animate-fade-in">
-              <ShieldAlert size={18} />
+              <ShieldAlert size={18} className="flex-shrink-0" />
               <span className="break-words">{error}</span>
             </div>
           )}
 
           {success && (
             <div className="flex items-center gap-2 p-4 bg-emerald-50 text-emerald-600 rounded-2xl text-sm font-bold border border-emerald-100 animate-fade-in">
-              <LogIn size={18} />
+              <LogIn size={18} className="flex-shrink-0" />
               {success}
             </div>
           )}
@@ -149,7 +170,7 @@ const Login: React.FC = () => {
           
           <div className="space-y-4">
             <p className="text-[9px] text-gray-300 font-medium italic uppercase tracking-widest">
-              Conexão Segura via Supabase • Acesso Restrito
+              Conexão Segura • Acesso Restrito
             </p>
             
             <div className="pt-2 space-y-1">
