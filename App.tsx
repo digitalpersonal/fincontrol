@@ -227,15 +227,54 @@ const App: React.FC = () => {
     setView('DAILY_FLOW');
   };
 
-  const handleAddUser = async (user: User) => {
-    if (currentUser?.role !== 'ADMIN') return;
-    const { error } = await supabase.from('profiles').insert({
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: 'USER'
-    });
-    if (!error) fetchUsers(); 
+  const handleAddUser = async (userToAdd: User): Promise<boolean> => { // Changed return type to Promise<boolean>
+    if (currentUser?.role !== 'ADMIN') {
+        console.error("Non-admin user attempted to add a user.");
+        alert("Você não tem permissão para adicionar usuários.");
+        return false;
+    }
+
+    try {
+        setLoading(true);
+
+        const { data: authData, error: authError } = await supabase.auth.signUp({
+            email: userToAdd.email,
+            password: userToAdd.password,
+            options: {
+                data: {
+                    name: userToAdd.name, // Pass name as metadata for potential use in trigger or profile update
+                }
+            }
+        });
+
+        if (authError) {
+            console.error("Error creating auth user:", authError);
+            let errorMessage = `Erro ao criar usuário: ${authError.message}`;
+            if (authError.message.includes('already registered')) {
+                errorMessage = `Este e-mail já está cadastrado. Por favor, use outro.`;
+            }
+            alert(errorMessage);
+            return false;
+        }
+
+        if (authData.user) {
+            console.log("Auth user created successfully:", authData.user.id);
+            alert(`Usuário "${userToAdd.name}" criado com sucesso! (ID: ${authData.user.id}).`);
+            fetchUsers(); // Refresh the list of profiles
+            return true;
+        } else {
+            // This path is usually taken if email confirmation is required, and no session is immediately created.
+            alert(`Usuário "${userToAdd.name}" registrado! Um e-mail de confirmação foi enviado para ${userToAdd.email}. O usuário precisará verificar o e-mail antes de fazer login.`);
+            // Even if user needs to confirm, the signup was initiated, so we can consider it "successful" for the admin's action.
+            return true; // Consider it successful as the signup flow was initiated.
+        }
+    } catch (err) {
+        console.error("Unexpected error during user creation:", err);
+        alert("Ocorreu um erro inesperado ao criar o usuário.");
+        return false;
+    } finally {
+        setLoading(false);
+    }
   };
 
   const handleDeleteUser = async (id: string) => {
@@ -386,7 +425,7 @@ const App: React.FC = () => {
         <button onClick={() => setView('CREDIT_HISTORY')} className={`flex flex-col items-center ${view === 'CREDIT_HISTORY' ? 'text-blue-600' : 'text-gray-400'}`}>
           <CreditCard size={24} /><span className="text-[10px] font-bold mt-1">Crédito</span>
         </button>
-        <button onClick={() => { setExpenseToEdit(null); setView('ADD_ENTRY'); }} className="bg-blue-600 text-white rounded-full p-3 -mt-8 shadow-xl active:scale-90 transition">
+        <button onClick={() => { setExpenseToEdit(null); setView('ADD_ENTRY'); }} className="bg-blue-600 text-white rounded-full p-3 -mt-8 shadow-xl active:scale-95 transition">
           <Plus size={32} />
         </button>
         <button onClick={() => setView('DASHBOARD')} className={`flex flex-col items-center ${view === 'DASHBOARD' ? 'text-blue-600' : 'text-gray-400'}`}>
