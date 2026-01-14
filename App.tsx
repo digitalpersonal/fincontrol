@@ -62,9 +62,9 @@ const App: React.FC = () => {
 
   const fetchData = useCallback(async (userId: string, email: string) => {
     if (!isSupabaseConfigured) return;
-    
+
     if (fetchController.current) {
-      fetchController.current.abort();
+        fetchController.current.abort();
     }
     const controller = new AbortController();
     fetchController.current = controller;
@@ -72,81 +72,105 @@ const App: React.FC = () => {
     setLoading(true);
 
     try {
-      console.log(`[DEBUG] fetchData called for userId: ${userId}, email: ${email}`);
+        const isMasterAdmin = email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
-      // Determine the role for the current user. Master admin is always 'ADMIN'.
-      let resolvedRole: 'ADMIN' | 'USER' = (email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) ? 'ADMIN' : 'USER';
+        // Fetch profile and all other user-specific data concurrently
+        const [
+            profileResponse,
+            expensesResponse,
+            earningsResponse,
+            kmResponse,
+            creditsResponse,
+            recurringResponse
+        ] = await Promise.all([
+            supabase.from('profiles').select('*').eq('id', userId).maybeSingle().abortSignal(controller.signal as any),
+            supabase.from('expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
+            supabase.from('earnings').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
+            supabase.from('daily_km').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
+            supabase.from('credits').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
+            supabase.from('recurring_expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
+        ]);
 
-      // Attempt to fetch existing profile to get other data like 'name'
-      const { data: existingProfile, error: profileError } = 
-          await supabase.from('profiles').select('*').eq('id', userId).maybeSingle().abortSignal(controller.signal as any);
+        if (controller.signal.aborted || !isMounted.current) return;
 
-      if (profileError && !profileError.message.includes('abort') && profileError.code !== '20') {
-          console.error("[DEBUG] Error fetching existing profile:", profileError);
-          // Proceed with default role if profile fetch failed, as role is already set for admin.
-      }
+        // Set all data states
+        setExpenses(expensesResponse.data || []);
+        setEarnings(earningsResponse.data || []);
+        setKmEntries(kmResponse.data || []);
+        setCredits(creditsResponse.data || []);
+        setRecurringExpenses(recurringResponse.data || []);
+        
+        const profileData = profileResponse.data;
+        let userToSet: User;
 
-      // If it's not the master admin and an existing profile was found, use its role.
-      // This allows other users to have their roles (e.g., 'USER') persisted.
-      if (existingProfile && email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
-          resolvedRole = existingProfile.role as 'ADMIN' | 'USER';
-      }
+        if (isMasterAdmin) {
+            // Force ADMIN role for the master user, regardless of DB state
+            userToSet = {
+                id: userId,
+                name: profileData?.name || email.split('@')[0] || 'Admin',
+                email: email,
+                password: '',
+                role: 'ADMIN'
+            };
 
-      console.log(`[DEBUG] Determined role for ${email}: ${resolvedRole}`);
+            // If the DB profile is missing or incorrect, update it.
+            // This is a "fire-and-forget" to sync DB, the UI is already correct.
+            if (!profileData || profileData.role !== 'ADMIN') {
+                console.log("Master Admin profile out of sync. Correcting in DB.");
+                await supabase.from('profiles').upsert({
+                    id: userId,
+                    role: 'ADMIN',
+                    email: email,
+                    name: userToSet.name
+                }, { onConflict: 'id' });
+            }
+            fetchUsers(controller.signal);
 
-      // Prepare data for upsert operation. Always use the resolvedRole.
-      const profilePayload = {
-          id: userId,
-          // Use existing name if available, otherwise derive from email or default to 'Usuário'
-          name: existingProfile?.name || email.split('@')[0] || 'Usuário',
-          role: resolvedRole,
-          email: email
-      };
-
-      // Upsert the profile to ensure the role is correctly set in the database
-      const { data: updatedProfile, error: upsertError } = 
-          await supabase.from('profiles').upsert(profilePayload, { onConflict: 'id' }).select().single().abortSignal(controller.signal as any);
-
-      if (upsertError && !upsertError.message.includes('abort') && upsertError.code !== '20') {
-          console.error("[DEBUG] Error upserting profile:", upsertError);
-          throw upsertError; // Re-throw if a critical error during upsert
-      }
-
-      if (updatedProfile && isMounted.current) {
-          setCurrentUser({
-              id: updatedProfile.id,
-              name: updatedProfile.name,
-              email: updatedProfile.email,
-              password: '', // Password is not stored here
-              role: updatedProfile.role as 'ADMIN' | 'USER' // Use the role returned by the upsert
-          });
-          console.log("[DEBUG] currentUser set:", updatedProfile);
-
-          if (updatedProfile.role === 'ADMIN') {
-              fetchUsers(controller.signal);
-          }
-      } else {
-          // Fallback if upsert didn't return data for some reason (should be rare)
-          console.warn("[DEBUG] Upsert did not return profile data, falling back to temporary user state.");
-          setCurrentUser({
-              id: userId,
-              name: email.split('@')[0] || 'Usuário',
-              email: email,
-              password: '',
-              role: resolvedRole // Use the resolved role
-          });
-      }
+        } else {
+            // For regular users, trust the database or create a new profile if one doesn't exist
+            if (profileData) {
+                userToSet = {
+                    id: userId,
+                    name: profileData.name,
+                    email: email,
+                    password: '',
+                    role: profileData.role as 'ADMIN' | 'USER'
+                };
+            } else {
+                console.warn(`Profile not found for user ${userId}. Creating a new one.`);
+                // This case handles users created by the admin who are logging in for the first time
+                const { data: newProfile } = await supabase.from('profiles').insert({
+                    id: userId,
+                    name: email.split('@')[0] || 'Novo Usuário',
+                    role: 'USER',
+                    email: email
+                }).select().single();
+                
+                userToSet = {
+                    id: userId,
+                    name: newProfile?.name || 'Novo Usuário',
+                    email: email,
+                    password: '',
+                    role: 'USER'
+                };
+            }
+        }
+        
+        if (isMounted.current) {
+            setCurrentUser(userToSet);
+        }
 
     } catch (err: any) {
-      if (err.name !== 'AbortError' && !err.message?.includes('aborted')) {
-        console.error("Erro ao carregar dados do usuário ou perfil:", err);
-      }
+        if (err.name !== 'AbortError' && !err.message?.includes('aborted')) {
+            console.error("Erro ao carregar dados do usuário:", err);
+        }
     } finally {
-      if (isMounted.current && !controller.signal.aborted) {
-        setLoading(false);
-      }
+        if (isMounted.current && !controller.signal.aborted) {
+            setLoading(false);
+        }
     }
-  }, [fetchUsers]);
+}, [fetchUsers]);
+
 
   useEffect(() => {
     isMounted.current = true;
@@ -162,6 +186,10 @@ const App: React.FC = () => {
         setCurrentUser(null);
         setExpenses([]);
         setEarnings([]);
+        setKmEntries([]);
+        setCredits([]);
+        setRecurringExpenses([]);
+        setAllUsers([]);
         setLoading(false);
       }
     });
