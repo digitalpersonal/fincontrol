@@ -1,12 +1,12 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Expense, Earning, DailyKm, EARNING_CATEGORIES, DEFAULT_CATEGORIES } from '../types';
-import { Plus, ArrowUpCircle, ArrowDownCircle, Printer, Calendar, Gauge, Navigation, Settings, X, Trash2 } from 'lucide-react';
+import { Plus, Printer, Navigation, Gauge, Settings, X, Trash2 } from 'lucide-react';
 
 interface DailyFlowProps {
   onAddEarning: (earning: Earning) => void;
   onAddExpense: (expense: Expense) => void;
-  onUpdateKm: (km: DailyKm) => void;
+  onUpdateKm: (entry: DailyKm) => void;
   expenses: Expense[];
   earnings: Earning[];
   kmEntries: DailyKm[];
@@ -19,7 +19,7 @@ interface DailyFlowProps {
 const DailyFlow: React.FC<DailyFlowProps> = ({ 
   onAddEarning, 
   onAddExpense, 
-  onUpdateKm, 
+  onUpdateKm,
   expenses, 
   earnings, 
   kmEntries,
@@ -40,16 +40,50 @@ const DailyFlow: React.FC<DailyFlowProps> = ({
   const [newCategoryName, setNewCategoryName] = useState('');
   
   const today = new Date().toISOString().split('T')[0];
-  const currentKmEntry = kmEntries.find(k => k.date === today) || { id: '', date: today, startKm: 0, endKm: 0 };
+
+  // Odometer Local State (fixes typing issue)
+  const [localStartKm, setLocalStartKm] = useState('');
+  const [localEndKm, setLocalEndKm] = useState('');
+
+  useEffect(() => {
+    const entry = kmEntries.find(k => k.date === today);
+    if (entry) {
+        setLocalStartKm(entry.startKm ? entry.startKm.toString() : '');
+        setLocalEndKm(entry.endKm ? entry.endKm.toString() : '');
+    } else {
+        setLocalStartKm('');
+        setLocalEndKm('');
+    }
+  }, [kmEntries, today]);
+
+  const handleKmBlur = () => {
+    const start = parseFloat(localStartKm) || 0;
+    const end = parseFloat(localEndKm) || 0;
+    
+    // Check if we have an entry to update or create new
+    const entry = kmEntries.find(k => k.date === today);
+    const id = entry?.id || crypto.randomUUID();
+
+    if (start > 0 || end > 0) {
+        onUpdateKm({
+            id,
+            date: today,
+            startKm: start,
+            endKm: end
+        });
+    }
+  };
 
   const dailyEarnings = useMemo(() => earnings.filter(e => e.date === today), [earnings, today]);
   const dailyExpenses = useMemo(() => expenses.filter(e => e.date === today), [expenses, today]);
   
   const totalDailyEarning = dailyEarnings.reduce((a, b) => a + b.amount, 0);
   const totalDailyExpense = dailyExpenses.reduce((a, b) => a + b.amount, 0);
-  const kmRodados = currentKmEntry.endKm > 0 ? currentKmEntry.endKm - currentKmEntry.startKm : 0;
-  
-  const rendimentoPorKm = kmRodados > 0 ? (totalDailyEarning / kmRodados) : 0;
+
+  const start = parseFloat(localStartKm) || 0;
+  const end = parseFloat(localEndKm) || 0;
+  const totalKm = end > start ? end - start : 0;
+  const yieldPerKm = totalKm > 0 ? (totalDailyEarning / totalKm) : 0;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,15 +111,6 @@ const DailyFlow: React.FC<DailyFlowProps> = ({
 
     setAmount('');
     setDescription('');
-  };
-
-  const handleKmUpdate = (field: 'startKm' | 'endKm', value: string) => {
-    const numValue = parseInt(value) || 0;
-    onUpdateKm({
-      ...currentKmEntry,
-      id: currentKmEntry.id || crypto.randomUUID(),
-      [field]: numValue
-    });
   };
 
   const handleCreateCategory = () => {
@@ -177,46 +202,43 @@ const DailyFlow: React.FC<DailyFlowProps> = ({
 
   return (
     <div className="space-y-6 animate-fade-in pb-24">
-      {/* KM Control Card */}
-      <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-xl border border-slate-800">
-        <h3 className="text-xs font-black text-blue-400 uppercase tracking-widest mb-4 flex items-center">
-          <Gauge size={14} className="mr-2" /> Controle de Odômetro (KM)
-        </h3>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="text-[10px] text-slate-400 block mb-1">KM INICIAL</label>
-            <input 
-              type="number"
-              value={currentKmEntry.startKm || ''}
-              onChange={(e) => handleKmUpdate('startKm', e.target.value)}
-              className="w-full bg-slate-800 border border-slate-700 p-3 rounded-xl text-xl font-bold focus:ring-2 focus:ring-blue-500 outline-none"
-              placeholder="0"
-            />
-          </div>
-          <div>
-            <label className="text-[10px] text-slate-400 block mb-1">KM FINAL</label>
-            <input 
-              type="number"
-              value={currentKmEntry.endKm || ''}
-              onChange={(e) => handleKmUpdate('endKm', e.target.value)}
-              className="w-full bg-slate-800 border border-slate-700 p-3 rounded-xl text-xl font-bold focus:ring-2 focus:ring-blue-500 outline-none"
-              placeholder="0"
-            />
+       {/* Odometer Card */}
+       <div className="bg-gray-900 text-white p-5 rounded-2xl shadow-lg">
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-lg font-bold flex items-center"><Gauge className="mr-2 text-blue-400" /> Controle KM</h2>
+          <div className="text-right">
+             <p className="text-[10px] text-gray-400 uppercase font-bold">Rendimento Hoje</p>
+             <p className="text-xl font-bold text-emerald-400">R$ {yieldPerKm.toFixed(2)} /km</p>
           </div>
         </div>
-        
-        {kmRodados > 0 && (
-          <div className="mt-4 pt-4 border-t border-slate-800 flex justify-between items-center">
-            <div>
-              <p className="text-xs text-slate-400">Rodados hoje</p>
-              <p className="text-lg font-black text-blue-400">{kmRodados} km</p>
-            </div>
-            <div className="text-right">
-              <p className="text-xs text-slate-400">Rendimento</p>
-              <p className="text-lg font-black text-emerald-400">R$ {rendimentoPorKm.toFixed(2)}/km</p>
-            </div>
+        <div className="flex gap-4">
+          <div className="flex-1">
+             <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">KM Inicial</label>
+             <input 
+                type="number" 
+                value={localStartKm}
+                onChange={(e) => setLocalStartKm(e.target.value)}
+                onBlur={handleKmBlur}
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg p-2 text-white font-mono focus:ring-1 focus:ring-blue-500 outline-none"
+                placeholder="00000"
+             />
           </div>
-        )}
+          <div className="flex-1">
+             <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">KM Final</label>
+             <input 
+                type="number" 
+                value={localEndKm}
+                onChange={(e) => setLocalEndKm(e.target.value)}
+                onBlur={handleKmBlur}
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg p-2 text-white font-mono focus:ring-1 focus:ring-blue-500 outline-none"
+                placeholder="00000"
+             />
+          </div>
+          <div className="flex-1 bg-gray-800 rounded-lg p-2 flex flex-col justify-center items-center border border-gray-700">
+              <span className="text-[10px] font-bold text-gray-400 uppercase">Rodado</span>
+              <span className="text-lg font-bold text-blue-400">{totalKm} km</span>
+          </div>
+        </div>
       </div>
 
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
@@ -296,11 +318,7 @@ const DailyFlow: React.FC<DailyFlowProps> = ({
       <div className="space-y-2">
         <h3 className="font-bold text-gray-500 text-xs uppercase px-2 tracking-widest">Últimos Registros</h3>
         {[...dailyEarnings, ...dailyExpenses].sort((a,b) => b.id.localeCompare(a.id)).slice(0, 5).map(item => {
-           // We determine if it's an earning by checking if its category is in the Earning Categories list
-           // or checking the object structure if we had a discriminator field. 
-           // For safety, let's assume if it doesn't have a 'type' field and is in earning list, or we check against known lists.
            const isEarning = 'category' in item && earningCategories.includes(item.category) && !('type' in item);
-           // Fallback check:
            const isExpense = 'type' in item;
            const displayEarning = !isExpense;
 
