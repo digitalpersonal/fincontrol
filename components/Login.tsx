@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { Lock, Mail, LogIn, ShieldAlert, MessageCircle, Loader2, Eye, EyeOff, UserPlus } from 'lucide-react';
+import { Lock, Mail, LogIn, ShieldAlert, MessageCircle, Loader2, Eye, EyeOff, UserPlus, Ban } from 'lucide-react';
 
 const ADMIN_EMAIL = 'digitalpersonal@gmail.com'; // Definido como o e-mail do administrador master
 
@@ -22,44 +22,68 @@ const Login: React.FC = () => {
     
     try {
       if (isSignUp) {
-        // Apenas o e-mail do administrador master pode se cadastrar
-        if (email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
-          setError("O cadastro de novos usuários é feito exclusivamente pelo administrador do sistema. Fale com ele para criar sua conta.");
-          return; // Impede o signup
-        }
-
-        const { error: signUpError } = await supabase.auth.signUp({
+        // Cadastro liberado para todos
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
           email,
           password,
         });
 
         if (signUpError) {
           if (signUpError.message.includes('User already registered')) {
-            setError('Conta de administrador já existe. Por favor, faça login.');
+            setError('Este e-mail já está cadastrado. Por favor, faça login.');
           } else {
             setError(signUpError.message);
           }
-        } else {
-          setSuccess('Conta de administrador criada com sucesso! Você já pode fazer login.');
-          setIsSignUp(false); // Redireciona para o login após o cadastro bem-sucedido
+        } else if (signUpData.user) {
+          // Criar perfil inicial automaticamente
+          const { error: profileError } = await supabase.from('profiles').insert({
+            id: signUpData.user.id,
+            email: email,
+            name: email.split('@')[0],
+            role: email.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? 'ADMIN' : 'USER',
+            status: 'ACTIVE'
+          });
+
+          if (profileError) {
+            console.error("Erro ao criar perfil:", profileError);
+          }
+
+          setSuccess('Conta criada com sucesso! Você já pode fazer login.');
+          setIsSignUp(false);
         }
       } else {
-        const { error: authError } = await supabase.auth.signInWithPassword({
+        const { data: signInData, error: authError } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
 
         if (authError) {
           if (authError.message === 'Invalid login credentials') {
-            setError('E-mail ou senha incorretos. Verifique seus dados ou fale com o administrador.');
+            setError('E-mail ou senha incorretos.');
           } else {
             setError(authError.message);
           }
+          return;
+        }
+
+        // Verificar se o usuário está BLOQUEADO
+        if (signInData.user) {
+            const { data: profile } = await supabase
+                .from('profiles')
+                .select('status')
+                .eq('id', signInData.user.id)
+                .single();
+
+            if (profile && profile.status === 'BLOCKED') {
+                await supabase.auth.signOut();
+                setError('ACESSO SUSPENSO: Conta bloqueada por pendência financeira. Contate o suporte.');
+                return;
+            }
         }
       }
     } catch (err: any) {
       setError('Ocorreu um erro inesperado. Tente novamente.');
-      console.error(err);
+      console.error("[DEBUG Login] Unexpected Error:", err);
     } finally {
       setLoading(false);
     }
@@ -79,7 +103,7 @@ const Login: React.FC = () => {
           </div>
           <h1 className="text-3xl font-black text-gray-800">FinControl<span className="text-blue-600">AI</span></h1>
           <p className="text-gray-500 mt-2 font-medium">
-            {isSignUp ? 'Cadastro do Administrador Geral' : 'Acesse seu painel financeiro'}
+            {isSignUp ? 'Crie sua conta gratuitamente' : 'Acesse seu painel financeiro'}
           </p>
         </div>
 
@@ -90,7 +114,6 @@ const Login: React.FC = () => {
           >
             Entrar
           </button>
-          {/* A aba Cadastrar permanece visível para que o ADMIN_EMAIL possa se cadastrar inicialmente */}
           <button 
             onClick={() => { setIsSignUp(true); setError(null); setSuccess(null); }}
             className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition ${isSignUp ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
@@ -138,8 +161,8 @@ const Login: React.FC = () => {
           </div>
 
           {error && (
-            <div className="flex items-center gap-2 p-4 bg-red-50 text-red-600 rounded-2xl text-sm font-bold border border-red-100 animate-fade-in">
-              <ShieldAlert size={18} className="flex-shrink-0" />
+            <div className={`flex items-start gap-2 p-4 rounded-2xl text-sm font-bold border animate-fade-in ${error.includes('SUSPENSO') ? 'bg-red-100 text-red-800 border-red-200' : 'bg-red-50 text-red-600 border-red-100'}`}>
+              {error.includes('SUSPENSO') ? <Ban size={18} className="flex-shrink-0 mt-0.5" /> : <ShieldAlert size={18} className="flex-shrink-0 mt-0.5" />}
               <span className="break-words">{error}</span>
             </div>
           )}
@@ -156,7 +179,7 @@ const Login: React.FC = () => {
             disabled={loading}
             className="w-full py-4 bg-blue-600 text-white font-black rounded-2xl shadow-xl hover:bg-blue-700 active:scale-95 transition-all text-lg flex justify-center items-center"
           >
-            {loading ? <Loader2 className="animate-spin mr-2" /> : (isSignUp ? 'CRIAR MINHA CONTA' : 'ENTRAR NO SISTEMA')}
+            {loading ? <Loader2 className="animate-spin mr-2" /> : (isSignUp ? 'CRIAR CONTA GRÁTIS' : 'ENTRAR NO SISTEMA')}
           </button>
         </form>
 

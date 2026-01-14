@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Expense, Earning, DailyKm, CreditEntry, User, ViewState, DEFAULT_CATEGORIES, RecurringExpense } from './types';
+import { Expense, Earning, DailyKm, CreditEntry, User, ViewState, DEFAULT_CATEGORIES, EARNING_CATEGORIES, RecurringExpense } from './types';
 import Dashboard from './components/Dashboard';
 import ExpenseForm from './components/ExpenseForm';
 import ExpenseList from './components/ExpenseList';
@@ -24,7 +24,17 @@ const App: React.FC = () => {
   const fetchController = useRef<AbortController | null>(null);
 
   // Data States
-  const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES);
+  // Initialize categories from LocalStorage if available, otherwise use defaults
+  const [categories, setCategories] = useState<string[]>(() => {
+    const saved = localStorage.getItem('expenseCategories');
+    return saved ? JSON.parse(saved) : DEFAULT_CATEGORIES;
+  });
+
+  const [earningCategories, setEarningCategories] = useState<string[]>(() => {
+    const saved = localStorage.getItem('earningCategories');
+    return saved ? JSON.parse(saved) : EARNING_CATEGORIES;
+  });
+
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [earnings, setEarnings] = useState<Earning[]>([]);
   const [kmEntries, setKmEntries] = useState<DailyKm[]>([]);
@@ -35,6 +45,15 @@ const App: React.FC = () => {
   const [view, setView] = useState<ViewState>('DAILY_FLOW');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [expenseToEdit, setExpenseToEdit] = useState<Expense | null>(null);
+
+  // Persist categories changes
+  useEffect(() => {
+    localStorage.setItem('expenseCategories', JSON.stringify(categories));
+  }, [categories]);
+
+  useEffect(() => {
+    localStorage.setItem('earningCategories', JSON.stringify(earningCategories));
+  }, [earningCategories]);
 
   const fetchUsers = useCallback(async (signal?: AbortSignal) => {
     if (!isSupabaseConfigured) return;
@@ -50,7 +69,8 @@ const App: React.FC = () => {
           name: p.name || 'Usuário',
           email: p.email || '',
           password: '***',
-          role: p.role as 'ADMIN' | 'USER'
+          role: p.role as 'ADMIN' | 'USER',
+          status: p.status || 'ACTIVE'
         })));
       }
     } catch (err: any) {
@@ -61,7 +81,11 @@ const App: React.FC = () => {
   }, []);
 
   const fetchData = useCallback(async (userId: string, email: string) => {
-    if (!isSupabaseConfigured) return;
+    if (!isSupabaseConfigured) {
+      console.warn("Supabase não está configurado. Verifique as variáveis de ambiente.");
+      setLoading(false);
+      return;
+    }
 
     if (fetchController.current) {
         fetchController.current.abort();
@@ -74,8 +98,24 @@ const App: React.FC = () => {
     try {
         const isMasterAdmin = email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
+        // 1. Fetch Profile First to check STATUS
+        const { data: profileData, error: profileError } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', userId)
+            .maybeSingle()
+            .abortSignal(controller.signal as any);
+
+        if (controller.signal.aborted || !isMounted.current) return;
+
+        // CHECK IF BLOCKED
+        if (profileData && profileData.status === 'BLOCKED') {
+            await supabase.auth.signOut();
+            alert("ACESSO SUSPENSO: Sua conta está bloqueada por pendência financeira. Entre em contato com o suporte.");
+            return;
+        }
+
         // Conditionally define promises for financial data
-        // For master admin, these promises will resolve immediately with empty arrays
         let expensesPromise = Promise.resolve({ data: [] });
         let earningsPromise = Promise.resolve({ data: [] });
         let kmPromise = Promise.resolve({ data: [] });
@@ -90,16 +130,13 @@ const App: React.FC = () => {
             recurringPromise = supabase.from('recurring_expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
         }
 
-        // Fetch profile and all other user-specific data concurrently
         const [
-            profileResponse,
             expensesResponse,
             earningsResponse,
             kmResponse,
             creditsResponse,
             recurringResponse
         ] = await Promise.all([
-            supabase.from('profiles').select('*').eq('id', userId).maybeSingle().abortSignal(controller.signal as any),
             expensesPromise,
             earningsPromise,
             kmPromise,
@@ -116,50 +153,48 @@ const App: React.FC = () => {
         setCredits(creditsResponse.data || []);
         setRecurringExpenses(recurringResponse.data || []);
         
-        const profileData = profileResponse.data;
         let userToSet: User;
 
         if (isMasterAdmin) {
-            // Force ADMIN role for the master user, regardless of DB state
             userToSet = {
                 id: userId,
-                name: profileData?.name || email.split('@')[0] || 'Admin Mestre', // More explicit name
+                name: profileData?.name || email.split('@')[0] || 'Admin Mestre', 
                 email: email,
                 password: '',
-                role: 'ADMIN' // Unquestionably ADMIN for the UI
+                role: 'ADMIN',
+                status: 'ACTIVE'
             };
 
-            // If the DB profile is missing or incorrect, update it.
-            // This is a "fire-and-forget" to sync DB, the UI is already correct.
+            // Force admin role in DB if missing
             if (!profileData || profileData.role !== 'ADMIN') {
-                console.log("Master Admin profile out of sync. Correcting in DB.");
                 await supabase.from('profiles').upsert({
                     id: userId,
                     role: 'ADMIN',
                     email: email,
-                    name: userToSet.name
+                    name: userToSet.name,
+                    status: 'ACTIVE'
                 }, { onConflict: 'id' });
             }
-            fetchUsers(controller.signal); // Always fetch all users for the admin panel
+            fetchUsers(controller.signal);
 
         } else {
-            // For regular users, trust the database or create a new profile if one doesn't exist
             if (profileData) {
                 userToSet = {
                     id: userId,
                     name: profileData.name,
                     email: email,
                     password: '',
-                    role: profileData.role as 'ADMIN' | 'USER'
+                    role: profileData.role as 'ADMIN' | 'USER',
+                    status: profileData.status || 'ACTIVE'
                 };
             } else {
                 console.warn(`Profile not found for user ${userId}. Creating a new one.`);
-                // This case handles users created by the admin who are logging in for the first time
                 const { data: newProfile } = await supabase.from('profiles').insert({
                     id: userId,
                     name: email.split('@')[0] || 'Novo Usuário',
                     role: 'USER',
-                    email: email
+                    email: email,
+                    status: 'ACTIVE'
                 }).select().single();
                 
                 userToSet = {
@@ -167,14 +202,14 @@ const App: React.FC = () => {
                     name: newProfile?.name || 'Novo Usuário',
                     email: email,
                     password: '',
-                    role: 'USER'
+                    role: 'USER',
+                    status: 'ACTIVE'
                 };
             }
         }
         
         if (isMounted.current) {
             setCurrentUser(userToSet);
-            console.log(`[DEBUG] Current user set: ${userToSet.email}, Role: ${userToSet.role}`);
         }
 
     } catch (err: any) {
@@ -227,9 +262,8 @@ const App: React.FC = () => {
     setView('DAILY_FLOW');
   };
 
-  const handleAddUser = async (userToAdd: User): Promise<boolean> => { // Changed return type to Promise<boolean>
+  const handleAddUser = async (userToAdd: User): Promise<boolean> => {
     if (currentUser?.role !== 'ADMIN') {
-        console.error("Non-admin user attempted to add a user.");
         alert("Você não tem permissão para adicionar usuários.");
         return false;
     }
@@ -242,7 +276,7 @@ const App: React.FC = () => {
             password: userToAdd.password,
             options: {
                 data: {
-                    name: userToAdd.name, // Pass name as metadata for potential use in trigger or profile update
+                    name: userToAdd.name,
                 }
             }
         });
@@ -257,16 +291,22 @@ const App: React.FC = () => {
             return false;
         }
 
+        // Ensure profile is created with correct status
         if (authData.user) {
-            console.log("Auth user created successfully:", authData.user.id);
-            alert(`Usuário "${userToAdd.name}" criado com sucesso! (ID: ${authData.user.id}).`);
-            fetchUsers(); // Refresh the list of profiles
+            await supabase.from('profiles').upsert({
+                id: authData.user.id,
+                email: userToAdd.email,
+                name: userToAdd.name,
+                role: 'USER',
+                status: 'ACTIVE'
+            });
+            
+            alert(`Usuário "${userToAdd.name}" criado com sucesso!`);
+            fetchUsers(); 
             return true;
         } else {
-            // This path is usually taken if email confirmation is required, and no session is immediately created.
-            alert(`Usuário "${userToAdd.name}" registrado! Um e-mail de confirmação foi enviado para ${userToAdd.email}. O usuário precisará verificar o e-mail antes de fazer login.`);
-            // Even if user needs to confirm, the signup was initiated, so we can consider it "successful" for the admin's action.
-            return true; // Consider it successful as the signup flow was initiated.
+            alert(`Usuário "${userToAdd.name}" registrado! Verifique o e-mail.`);
+            return true;
         }
     } catch (err) {
         console.error("Unexpected error during user creation:", err);
@@ -279,8 +319,32 @@ const App: React.FC = () => {
 
   const handleDeleteUser = async (id: string) => {
     if (currentUser?.role !== 'ADMIN') return;
-    const { error } = await supabase.from('profiles').delete().eq('id', id);
-    if (!error) fetchUsers(); 
+    if (confirm('Tem certeza que deseja excluir este usuário? Esta ação não pode ser desfeita.')) {
+        const { error } = await supabase.from('profiles').delete().eq('id', id);
+        if (!error) fetchUsers(); 
+    }
+  };
+
+  const handleToggleUserStatus = async (id: string, newStatus: 'ACTIVE' | 'BLOCKED') => {
+    if (currentUser?.role !== 'ADMIN') return;
+    
+    // Check if trying to block self (redundancy check)
+    if (id === currentUser?.id) {
+        alert("Você não pode bloquear a si mesmo.");
+        return;
+    }
+
+    try {
+        const { error } = await supabase.from('profiles').update({ status: newStatus }).eq('id', id);
+        if (error) throw error;
+        
+        // Update local state immediately for better UX
+        setAllUsers(prev => prev.map(u => u.id === id ? { ...u, status: newStatus } : u));
+        
+    } catch (error: any) {
+        console.error("Erro ao alterar status:", error);
+        alert("Erro ao alterar status do usuário.");
+    }
   };
 
   const handleAddExpense = async (exp: Expense) => {
@@ -393,13 +457,32 @@ const App: React.FC = () => {
 
       <main className="max-w-5xl mx-auto px-4 py-6">
         {view === 'DASHBOARD' && <Dashboard expenses={expenses} earnings={earnings} />}
-        {view === 'DAILY_FLOW' && <DailyFlow onAddEarning={handleAddEarning} onAddExpense={handleAddExpense} onUpdateKm={handleUpdateKm} expenses={expenses} earnings={earnings} kmEntries={kmEntries} />}
+        {view === 'DAILY_FLOW' && (
+            <DailyFlow 
+                onAddEarning={handleAddEarning} 
+                onAddExpense={handleAddExpense} 
+                onUpdateKm={handleUpdateKm} 
+                expenses={expenses} 
+                earnings={earnings} 
+                kmEntries={kmEntries}
+                expenseCategories={categories}
+                earningCategories={earningCategories}
+                onAddCategory={(type, cat) => {
+                    if (type === 'EXPENSE') setCategories([...categories, cat]);
+                    else setEarningCategories([...earningCategories, cat]);
+                }}
+                onDeleteCategory={(type, cat) => {
+                    if (type === 'EXPENSE') setCategories(categories.filter(x => x !== cat));
+                    else setEarningCategories(earningCategories.filter(x => x !== cat));
+                }}
+            />
+        )}
         {view === 'ADD_ENTRY' && <ExpenseForm categories={categories} initialData={expenseToEdit} onAddExpense={handleAddExpense} onCancel={() => setView('LIST')} onAddCategory={(c) => setCategories([...categories, c])} onDeleteCategory={(c) => setCategories(categories.filter(x => x !== c))} />}
         {view === 'LIST' && <ExpenseList expenses={expenses} onDelete={handleDeleteExpense} onEdit={(e) => { setExpenseToEdit(e); setView('ADD_ENTRY'); }} />}
         {view === 'AI_ADVISOR' && <AIAdvisor expenses={expenses} />}
         {view === 'CREDIT_HISTORY' && <CreditHistory credits={credits} onAddCredit={handleAddCredit} onDeleteCredit={handleDeleteCredit} onUpdateCredit={handleUpdateCredit} />}
         {view === 'ADMIN_PANEL' && currentUser?.role === 'ADMIN' && (
-          <AdminPanel users={allUsers} onAddUser={handleAddUser} onDeleteUser={handleDeleteUser} />
+          <AdminPanel users={allUsers} onAddUser={handleAddUser} onDeleteUser={handleDeleteUser} onToggleStatus={handleToggleUserStatus} />
         )}
 
         <footer className="mt-20 pt-10 border-t border-gray-200 pb-16">

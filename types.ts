@@ -22,6 +22,7 @@ export interface User {
   password: string;
   role: 'ADMIN' | 'USER';
   name: string;
+  status?: 'ACTIVE' | 'BLOCKED';
 }
 
 export interface Expense {

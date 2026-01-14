@@ -1,15 +1,16 @@
 
 import React, { useState } from 'react';
 import { User } from '../types';
-import { UserPlus, Users, ShieldCheck, Mail, Lock, User as UserIcon, Trash2, X, MessageCircle, Eye, EyeOff, CheckCircle } from 'lucide-react';
+import { UserPlus, Users, ShieldCheck, Mail, Lock, User as UserIcon, Trash2, X, MessageCircle, Eye, EyeOff, CheckCircle, Ban, Unlock } from 'lucide-react';
 
 interface AdminPanelProps {
   users: User[];
-  onAddUser: (user: User) => Promise<boolean>; // Changed return type to Promise<boolean>
+  onAddUser: (user: User) => Promise<boolean>;
   onDeleteUser: (id: string) => void;
+  onToggleStatus: (id: string, newStatus: 'ACTIVE' | 'BLOCKED') => void;
 }
 
-const AdminPanel: React.FC<AdminPanelProps> = ({ users, onAddUser, onDeleteUser }) => {
+const AdminPanel: React.FC<AdminPanelProps> = ({ users, onAddUser, onDeleteUser, onToggleStatus }) => {
   const [showAdd, setShowAdd] = useState(false);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -31,31 +32,30 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ users, onAddUser, onDeleteUser 
     window.open(`https://wa.me/?text=${encodedMessage}`, '_blank');
   };
 
-  const handleSubmit = async (e: React.FormEvent) => { // Made async
+  const handleSubmit = async (e: React.FormEvent) => { 
     e.preventDefault();
     if (!name.trim() || !email.trim() || !password.trim()) {
       alert("Por favor, preencha todos os campos.");
       return;
     }
 
-    // Capture the password before clearing the state for the WhatsApp message
     const currentPassword = password.trim(); 
 
-    const success = await onAddUser({ // Await the result
-      id: crypto.randomUUID(), // This ID will be ignored by App.tsx, but required by type
+    const success = await onAddUser({ 
+      id: crypto.randomUUID(), 
       name: name.trim(),
       email: email.trim(),
-      password: currentPassword, // Pass the actual password for creation
-      role: 'USER' // New users are always 'USER'
+      password: currentPassword, 
+      role: 'USER',
+      status: 'ACTIVE'
     });
 
     if (success) {
-      // Store credentials for the temporary success message and WhatsApp option
       setLastCreatedUserCredentials({ name: name.trim(), email: email.trim(), password: currentPassword });
       setName('');
       setEmail('');
       setPassword('');
-      setShowAdd(false); // Close the add form
+      setShowAdd(false); 
     }
   };
 
@@ -70,7 +70,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ users, onAddUser, onDeleteUser 
           <p className="text-gray-500 text-sm font-medium">Administração central do sistema</p>
         </div>
         <button 
-          onClick={() => { setShowAdd(!showAdd); setLastCreatedUserCredentials(null); }} // Clear success message when toggling form
+          onClick={() => { setShowAdd(!showAdd); setLastCreatedUserCredentials(null); }} 
           className="bg-blue-600 text-white p-3 rounded-2xl shadow-lg hover:bg-blue-700 transition active:scale-95"
         >
           {showAdd ? <X size={24} /> : <UserPlus size={24} />}
@@ -170,42 +170,69 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ users, onAddUser, onDeleteUser 
             </h3>
         </div>
         <div className="divide-y divide-gray-100">
-            {users.map(u => (
-                <div key={u.id} className="p-4 flex justify-between items-center hover:bg-gray-50 transition">
-                    <div className="flex items-center gap-3">
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white shadow-sm ${u.role === 'ADMIN' ? 'bg-indigo-600' : 'bg-blue-400'}`}>
-                            {u.name.charAt(0).toUpperCase()}
+            {users.map(u => {
+                const isBlocked = u.status === 'BLOCKED';
+                return (
+                    <div key={u.id} className={`p-4 flex justify-between items-center transition ${isBlocked ? 'bg-red-50 hover:bg-red-100' : 'hover:bg-gray-50'}`}>
+                        <div className="flex items-center gap-3">
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white shadow-sm relative ${u.role === 'ADMIN' ? 'bg-indigo-600' : (isBlocked ? 'bg-red-400' : 'bg-blue-400')}`}>
+                                {u.name.charAt(0).toUpperCase()}
+                                {isBlocked && (
+                                    <div className="absolute -bottom-1 -right-1 bg-red-600 rounded-full p-0.5 border border-white">
+                                        <Ban size={10} className="text-white" />
+                                    </div>
+                                )}
+                            </div>
+                            <div>
+                                <p className={`font-bold leading-tight ${isBlocked ? 'text-red-800' : 'text-gray-800'}`}>
+                                    {u.name} {u.role === 'ADMIN' && '(Admin)'}
+                                </p>
+                                <p className={`text-xs ${isBlocked ? 'text-red-500' : 'text-gray-400'}`}>{u.email}</p>
+                                <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded mt-1 inline-block ${
+                                    isBlocked 
+                                        ? 'bg-red-200 text-red-800' 
+                                        : (u.role === 'ADMIN' ? 'bg-indigo-100 text-indigo-600' : 'bg-blue-100 text-blue-600')
+                                }`}>
+                                    {isBlocked ? 'BLOQUEADO' : u.role}
+                                </span>
+                            </div>
                         </div>
-                        <div>
-                            <p className="font-bold text-gray-800 leading-tight">{u.name}</p>
-                            <p className="text-xs text-gray-400">{u.email}</p>
-                            <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${u.role === 'ADMIN' ? 'bg-indigo-100 text-indigo-600' : 'bg-blue-100 text-blue-600'}`}>
-                                {u.role}
-                            </span>
+                        <div className="flex gap-2">
+                            {u.role !== 'ADMIN' && (
+                                <>
+                                    <button 
+                                        onClick={() => onToggleStatus(u.id, isBlocked ? 'ACTIVE' : 'BLOCKED')}
+                                        className={`p-2 rounded-lg transition ${
+                                            isBlocked 
+                                                ? 'bg-emerald-100 text-emerald-600 hover:bg-emerald-200' 
+                                                : 'bg-red-50 text-red-400 hover:bg-red-100 hover:text-red-600'
+                                        }`}
+                                        title={isBlocked ? "Desbloquear Acesso" : "Bloquear Acesso (Inadimplência)"}
+                                    >
+                                        {isBlocked ? <Unlock size={18} /> : <Ban size={18} />}
+                                    </button>
+
+                                    <button 
+                                        onClick={() => handleSendWhatsApp(u.name, u.email, u.password)}
+                                        className="p-2 text-emerald-500 hover:bg-emerald-50 rounded-lg transition"
+                                        title="Enviar acesso via WhatsApp"
+                                    >
+                                        <MessageCircle size={18} />
+                                    </button>
+                                    
+                                    <button 
+                                        onClick={() => onDeleteUser(u.id)}
+                                        className="p-2 text-gray-300 hover:text-red-500 rounded-lg transition"
+                                        title="Excluir usuário"
+                                    >
+                                        <Trash2 size={18} />
+                                    </button>
+                                </>
+                            )}
                         </div>
                     </div>
-                    <div className="flex gap-2">
-                        {u.role !== 'ADMIN' && (
-                            <button 
-                                onClick={() => handleSendWhatsApp(u.name, u.email, u.password)} // u.password will be '***' for existing users
-                                className="p-2 text-emerald-500 hover:bg-emerald-50 rounded-lg transition"
-                                title="Enviar acesso via WhatsApp"
-                            >
-                                <MessageCircle size={18} />
-                            </button>
-                        )}
-                        {u.role !== 'ADMIN' && (
-                            <button 
-                                onClick={() => onDeleteUser(u.id)}
-                                className="p-2 text-gray-300 hover:text-red-500 rounded-lg transition"
-                                title="Excluir usuário"
-                            >
-                                <Trash2 size={18} />
-                            </button>
-                        )}
-                    </div>
-                </div>
-            ))}
+                );
+            })}
         </div>
       </div>
     </div>

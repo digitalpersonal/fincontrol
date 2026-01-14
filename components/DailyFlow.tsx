@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { Expense, Earning, DailyKm, EARNING_CATEGORIES, DEFAULT_CATEGORIES } from '../types';
-import { Plus, ArrowUpCircle, ArrowDownCircle, Printer, Calendar, Gauge, Navigation } from 'lucide-react';
+import { Plus, ArrowUpCircle, ArrowDownCircle, Printer, Calendar, Gauge, Navigation, Settings, X, Trash2 } from 'lucide-react';
 
 interface DailyFlowProps {
   onAddEarning: (earning: Earning) => void;
@@ -10,13 +10,34 @@ interface DailyFlowProps {
   expenses: Expense[];
   earnings: Earning[];
   kmEntries: DailyKm[];
+  expenseCategories: string[];
+  earningCategories: string[];
+  onAddCategory: (type: 'EARNING' | 'EXPENSE', category: string) => void;
+  onDeleteCategory: (type: 'EARNING' | 'EXPENSE', category: string) => void;
 }
 
-const DailyFlow: React.FC<DailyFlowProps> = ({ onAddEarning, onAddExpense, onUpdateKm, expenses, earnings, kmEntries }) => {
+const DailyFlow: React.FC<DailyFlowProps> = ({ 
+  onAddEarning, 
+  onAddExpense, 
+  onUpdateKm, 
+  expenses, 
+  earnings, 
+  kmEntries,
+  expenseCategories,
+  earningCategories,
+  onAddCategory,
+  onDeleteCategory
+}) => {
   const [activeTab, setActiveTab] = useState<'EARNING' | 'EXPENSE'>('EARNING');
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
-  const [category, setCategory] = useState(activeTab === 'EARNING' ? EARNING_CATEGORIES[0] : DEFAULT_CATEGORIES[0]);
+  
+  // Initialize with the first category of the active list
+  const [category, setCategory] = useState(earningCategories[0] || 'Outros');
+
+  // Category Management State
+  const [isManagingCategories, setIsManagingCategories] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
   
   const today = new Date().toISOString().split('T')[0];
   const currentKmEntry = kmEntries.find(k => k.date === today) || { id: '', date: today, startKm: 0, endKm: 0 };
@@ -66,6 +87,93 @@ const DailyFlow: React.FC<DailyFlowProps> = ({ onAddEarning, onAddExpense, onUpd
       [field]: numValue
     });
   };
+
+  const handleCreateCategory = () => {
+    if (newCategoryName.trim()) {
+        onAddCategory(activeTab, newCategoryName.trim());
+        setCategory(newCategoryName.trim()); 
+        setNewCategoryName('');
+    }
+  };
+
+  const handleTabChange = (tab: 'EARNING' | 'EXPENSE') => {
+      setActiveTab(tab);
+      if (tab === 'EARNING') {
+          setCategory(earningCategories[0] || 'Outros');
+      } else {
+          setCategory(expenseCategories[0] || 'Outros');
+      }
+  };
+
+  const currentCategories = activeTab === 'EARNING' ? earningCategories : expenseCategories;
+  const defaultCategories = activeTab === 'EARNING' ? EARNING_CATEGORIES : DEFAULT_CATEGORIES;
+
+  if (isManagingCategories) {
+    return (
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 animate-fade-in">
+            <div className="flex justify-between items-center mb-6">
+                <h2 className="text-xl font-bold text-gray-800 flex items-center">
+                    <Settings className="mr-2 text-indigo-600" size={24} />
+                    Gerenciar: {activeTab === 'EARNING' ? 'Ganhos' : 'Despesas'}
+                </h2>
+                <button onClick={() => setIsManagingCategories(false)} className="text-gray-500 hover:text-gray-700">
+                    <X size={24} />
+                </button>
+            </div>
+
+            <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Adicionar Nova Categoria</label>
+                <div className="flex gap-2">
+                    <input 
+                        type="text" 
+                        value={newCategoryName}
+                        onChange={(e) => setNewCategoryName(e.target.value)}
+                        placeholder="Nome da categoria"
+                        className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                    />
+                    <button 
+                        onClick={handleCreateCategory}
+                        disabled={!newCategoryName.trim()}
+                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:bg-gray-300 transition flex items-center"
+                    >
+                        <Plus size={18} />
+                    </button>
+                </div>
+            </div>
+
+            <div className="space-y-2 max-h-60 overflow-y-auto pr-1 custom-scrollbar">
+                <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-2">Categorias Atuais</h3>
+                {currentCategories.map((cat) => {
+                    const isDefault = defaultCategories.includes(cat);
+                    return (
+                        <div key={cat} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg group hover:bg-gray-100 transition">
+                            <span className="text-gray-700 font-medium">{cat}</span>
+                            {!isDefault && (
+                                <button 
+                                    onClick={() => onDeleteCategory(activeTab, cat)}
+                                    className="text-gray-400 hover:text-red-500 transition opacity-0 group-hover:opacity-100 p-1"
+                                    title="Excluir categoria"
+                                >
+                                    <Trash2 size={16} />
+                                </button>
+                            )}
+                            {isDefault && <span className="text-xs text-gray-400 italic">Padrão</span>}
+                        </div>
+                    );
+                })}
+            </div>
+
+            <div className="mt-6 pt-4 border-t border-gray-100">
+                <button 
+                    onClick={() => setIsManagingCategories(false)}
+                    className="w-full py-3 bg-gray-100 text-gray-700 font-semibold rounded-xl hover:bg-gray-200 transition"
+                >
+                    Voltar para o Fluxo
+                </button>
+            </div>
+        </div>
+    );
+  }
 
   return (
     <div className="space-y-6 animate-fade-in pb-24">
@@ -134,14 +242,14 @@ const DailyFlow: React.FC<DailyFlowProps> = ({ onAddEarning, onAddExpense, onUpd
           <div className="flex p-1 bg-gray-100 rounded-xl">
             <button 
               type="button"
-              onClick={() => { setActiveTab('EARNING'); setCategory(EARNING_CATEGORIES[0]); }}
+              onClick={() => handleTabChange('EARNING')}
               className={`flex-1 py-3 rounded-lg font-bold text-sm transition ${activeTab === 'EARNING' ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-500'}`}
             >
               + Ganho
             </button>
             <button 
               type="button"
-              onClick={() => { setActiveTab('EXPENSE'); setCategory(DEFAULT_CATEGORIES[0]); }}
+              onClick={() => handleTabChange('EXPENSE')}
               className={`flex-1 py-3 rounded-lg font-bold text-sm transition ${activeTab === 'EXPENSE' ? 'bg-white text-rose-600 shadow-sm' : 'text-gray-500'}`}
             >
               - Gasto
@@ -154,15 +262,26 @@ const DailyFlow: React.FC<DailyFlowProps> = ({ onAddEarning, onAddExpense, onUpd
               onChange={(e) => setAmount(e.target.value)}
               className="w-full text-xl font-bold p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
             />
-            <select 
-              value={category} onChange={(e) => setCategory(e.target.value)}
-              className="w-full p-4 border border-gray-200 rounded-xl bg-white font-medium focus:ring-2 focus:ring-blue-500 outline-none"
-            >
-              {activeTab === 'EARNING' 
-                ? EARNING_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)
-                : DEFAULT_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)
-              }
-            </select>
+            <div className="flex flex-col gap-1">
+                <div className="relative">
+                    <select 
+                    value={category} onChange={(e) => setCategory(e.target.value)}
+                    className="w-full p-4 border border-gray-200 rounded-xl bg-white font-medium focus:ring-2 focus:ring-blue-500 outline-none appearance-none"
+                    >
+                    {currentCategories.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                       {/* Arrow icon could go here */}
+                    </div>
+                </div>
+                <button 
+                    type="button" 
+                    onClick={() => setIsManagingCategories(true)}
+                    className="text-[10px] font-bold text-indigo-500 hover:text-indigo-700 text-right flex items-center justify-end px-1"
+                >
+                    <Settings size={12} className="mr-1" /> Editar Categorias
+                </button>
+            </div>
           </div>
 
           <button 
@@ -177,15 +296,22 @@ const DailyFlow: React.FC<DailyFlowProps> = ({ onAddEarning, onAddExpense, onUpd
       <div className="space-y-2">
         <h3 className="font-bold text-gray-500 text-xs uppercase px-2 tracking-widest">Últimos Registros</h3>
         {[...dailyEarnings, ...dailyExpenses].sort((a,b) => b.id.localeCompare(a.id)).slice(0, 5).map(item => {
-           const isEarning = 'category' in item && EARNING_CATEGORIES.includes(item.category);
+           // We determine if it's an earning by checking if its category is in the Earning Categories list
+           // or checking the object structure if we had a discriminator field. 
+           // For safety, let's assume if it doesn't have a 'type' field and is in earning list, or we check against known lists.
+           const isEarning = 'category' in item && earningCategories.includes(item.category) && !('type' in item);
+           // Fallback check:
+           const isExpense = 'type' in item;
+           const displayEarning = !isExpense;
+
            return (
             <div key={item.id} className="bg-white p-4 rounded-xl border border-gray-100 flex justify-between items-center">
               <div>
                 <p className="font-bold text-gray-800 text-sm">{item.category}</p>
                 <p className="text-xs text-gray-400">{item.description || '-'}</p>
               </div>
-              <p className={`font-black ${isEarning ? 'text-emerald-600' : 'text-rose-600'}`}>
-                {isEarning ? '+' : '-'} R$ {item.amount.toFixed(2)}
+              <p className={`font-black ${displayEarning ? 'text-emerald-600' : 'text-rose-600'}`}>
+                {displayEarning ? '+' : '-'} R$ {item.amount.toFixed(2)}
               </p>
             </div>
            )
