@@ -39,10 +39,8 @@ const App: React.FC = () => {
   const fetchUsers = useCallback(async (signal?: AbortSignal) => {
     if (!isSupabaseConfigured) return;
     try {
-      // Adicionando abortSignal para todas as chamadas Supabase para permitir cancelamento
       const { data, error } = await supabase.from('profiles').select('*').abortSignal(signal as any);
       if (error) {
-        // Ignorar erros de abortamento
         if (error.message.includes('abort') || error.code === '20') return;
         throw error;
       }
@@ -56,7 +54,6 @@ const App: React.FC = () => {
         })));
       }
     } catch (err: any) {
-      // Ignorar erros de abortamento para não poluir o console ou disparar estados de erro desnecessários
       if (err.name !== 'AbortError' && !err.message?.includes('aborted')) {
         console.warn("Erro ao buscar usuários:", err);
       }
@@ -66,7 +63,6 @@ const App: React.FC = () => {
   const fetchData = useCallback(async (userId: string, email: string) => {
     if (!isSupabaseConfigured) return;
     
-    // Abortar requisições anteriores para evitar race conditions
     if (fetchController.current) {
       fetchController.current.abort();
     }
@@ -76,93 +72,76 @@ const App: React.FC = () => {
     setLoading(true);
 
     try {
-      // Usando Promise.allSettled para que uma falha não impeça as outras, e abortSignal
-      const results = await Promise.allSettled([
-        supabase.from('expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
-        supabase.from('earnings').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
-        supabase.from('daily_km').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
-        supabase.from('credits').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
-        supabase.from('recurring_expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
-        supabase.from('profiles').select('*').eq('id', userId).maybeSingle().abortSignal(controller.signal as any)
-      ]);
+      console.log(`[DEBUG] fetchData called for userId: ${userId}, email: ${email}`);
 
-      // Se o componente foi desmontado ou a requisição foi abortada, não atualize o estado
-      if (!isMounted.current || controller.signal.aborted) return;
+      // Determine the role for the current user. Master admin is always 'ADMIN'.
+      let resolvedRole: 'ADMIN' | 'USER' = (email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) ? 'ADMIN' : 'USER';
 
-      const [exp, ear, km, cred, rec, profResult] = results;
+      // Attempt to fetch existing profile to get other data like 'name'
+      const { data: existingProfile, error: profileError } = 
+          await supabase.from('profiles').select('*').eq('id', userId).maybeSingle().abortSignal(controller.signal as any);
 
-      // Tratamento dos resultados de Promise.allSettled
-      if (exp.status === 'fulfilled') {
-        const val = (exp as PromiseFulfilledResult<any>).value;
-        if (val?.data) setExpenses(val.data);
-      }
-      
-      if (ear.status === 'fulfilled') {
-        const val = (ear as PromiseFulfilledResult<any>).value;
-        if (val?.data) setEarnings(val.data);
-      }
-      
-      if (km.status === 'fulfilled') {
-        const val = (km as PromiseFulfilledResult<any>).value;
-        if (val?.data) setKmEntries(val.data);
-      }
-      
-      if (cred.status === 'fulfilled') {
-        const val = (cred as PromiseFulfilledResult<any>).value;
-        if (val?.data) setCredits(val.data);
-      }
-      
-      if (rec.status === 'fulfilled') {
-        const val = (rec as PromiseFulfilledResult<any>).value;
-        if (val?.data) setRecurringExpenses(val.data);
+      if (profileError && !profileError.message.includes('abort') && profileError.code !== '20') {
+          console.error("[DEBUG] Error fetching existing profile:", profileError);
+          // Proceed with default role if profile fetch failed, as role is already set for admin.
       }
 
-      // Regra Master Admin: digitalpersonal@gmail.com sempre é ADMIN
-      const isMasterAdmin = email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
-      const forcedRole = isMasterAdmin ? 'ADMIN' : 
-                        (profResult.status === 'fulfilled' ? (profResult as PromiseFulfilledResult<any>).value.data?.role : 'USER');
-      
-      const profileData = profResult.status === 'fulfilled' ? (profResult as PromiseFulfilledResult<any>).value.data : null;
+      // If it's not the master admin and an existing profile was found, use its role.
+      // This allows other users to have their roles (e.g., 'USER') persisted.
+      if (existingProfile && email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+          resolvedRole = existingProfile.role as 'ADMIN' | 'USER';
+      }
 
-      if (profileData) {
-        setCurrentUser({
-          id: profileData.id,
-          name: profileData.name || 'Usuário',
-          email: email,
-          password: '',
-          role: forcedRole as 'ADMIN' | 'USER'
-        });
-      } else {
-        // Se o perfil não existe, cria um novo (especialmente para o admin master no primeiro login)
-        const { data: newProf } = await supabase.from('profiles').upsert({
+      console.log(`[DEBUG] Determined role for ${email}: ${resolvedRole}`);
+
+      // Prepare data for upsert operation. Always use the resolvedRole.
+      const profilePayload = {
           id: userId,
-          name: email.split('@')[0] || 'Usuário',
-          role: forcedRole,
+          // Use existing name if available, otherwise derive from email or default to 'Usuário'
+          name: existingProfile?.name || email.split('@')[0] || 'Usuário',
+          role: resolvedRole,
           email: email
-        }).select().single();
-        
-        if (newProf && isMounted.current) {
-          setCurrentUser({
-            id: newProf.id,
-            name: newProf.name,
-            email: email,
-            password: '',
-            role: forcedRole as 'ADMIN' | 'USER'
-          });
-        }
+      };
+
+      // Upsert the profile to ensure the role is correctly set in the database
+      const { data: updatedProfile, error: upsertError } = 
+          await supabase.from('profiles').upsert(profilePayload, { onConflict: 'id' }).select().single().abortSignal(controller.signal as any);
+
+      if (upsertError && !upsertError.message.includes('abort') && upsertError.code !== '20') {
+          console.error("[DEBUG] Error upserting profile:", upsertError);
+          throw upsertError; // Re-throw if a critical error during upsert
       }
 
-      if (forcedRole === 'ADMIN') {
-        fetchUsers(controller.signal);
+      if (updatedProfile && isMounted.current) {
+          setCurrentUser({
+              id: updatedProfile.id,
+              name: updatedProfile.name,
+              email: updatedProfile.email,
+              password: '', // Password is not stored here
+              role: updatedProfile.role as 'ADMIN' | 'USER' // Use the role returned by the upsert
+          });
+          console.log("[DEBUG] currentUser set:", updatedProfile);
+
+          if (updatedProfile.role === 'ADMIN') {
+              fetchUsers(controller.signal);
+          }
+      } else {
+          // Fallback if upsert didn't return data for some reason (should be rare)
+          console.warn("[DEBUG] Upsert did not return profile data, falling back to temporary user state.");
+          setCurrentUser({
+              id: userId,
+              name: email.split('@')[0] || 'Usuário',
+              email: email,
+              password: '',
+              role: resolvedRole // Use the resolved role
+          });
       }
 
     } catch (err: any) {
-      // Ignorar erros de abortamento
       if (err.name !== 'AbortError' && !err.message?.includes('aborted')) {
-        console.error("Erro ao carregar dados:", err);
+        console.error("Erro ao carregar dados do usuário ou perfil:", err);
       }
     } finally {
-      // Apenas defina loading como false se o componente ainda estiver montado e a requisição não foi abortada
       if (isMounted.current && !controller.signal.aborted) {
         setLoading(false);
       }
@@ -172,7 +151,6 @@ const App: React.FC = () => {
   useEffect(() => {
     isMounted.current = true;
     
-    // Listener para mudanças no estado de autenticação
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
       if (!isMounted.current) return;
       
@@ -181,7 +159,6 @@ const App: React.FC = () => {
       if (newSession?.user) {
         fetchData(newSession.user.id, newSession.user.email || '');
       } else {
-        // Limpar estados ao deslogar
         setCurrentUser(null);
         setExpenses([]);
         setEarnings([]);
@@ -191,7 +168,6 @@ const App: React.FC = () => {
 
     return () => {
       isMounted.current = false;
-      // Abortar qualquer requisição pendente ao desmontar o componente
       if (fetchController.current) {
         fetchController.current.abort();
       }
@@ -214,23 +190,22 @@ const App: React.FC = () => {
       email: user.email,
       role: 'USER'
     });
-    if (!error) fetchUsers(); // Re-fetch users list
+    if (!error) fetchUsers(); 
   };
 
   const handleDeleteUser = async (id: string) => {
     if (currentUser?.role !== 'ADMIN') return;
     const { error } = await supabase.from('profiles').delete().eq('id', id);
-    if (!error) fetchUsers(); // Re-fetch users list
+    if (!error) fetchUsers(); 
   };
 
   const handleAddExpense = async (exp: Expense) => {
     if (!session?.user) return;
-    // O id do expense já vem do form (randomUUID para novos, existente para edições)
     const payload = { ...exp, user_id: session.user.id };
     const { data, error } = await supabase.from('expenses').upsert(payload).select().single();
     if (!error && data) {
       setExpenses(prev => [...prev.filter(e => e.id !== exp.id), data]);
-      setView('LIST'); // Navigate to list after add/edit
+      setView('LIST'); 
     }
   };
 
