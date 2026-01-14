@@ -74,6 +74,22 @@ const App: React.FC = () => {
     try {
         const isMasterAdmin = email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
+        // Conditionally define promises for financial data
+        // For master admin, these promises will resolve immediately with empty arrays
+        let expensesPromise = Promise.resolve({ data: [] });
+        let earningsPromise = Promise.resolve({ data: [] });
+        let kmPromise = Promise.resolve({ data: [] });
+        let creditsPromise = Promise.resolve({ data: [] });
+        let recurringPromise = Promise.resolve({ data: [] });
+
+        if (!isMasterAdmin) {
+            expensesPromise = supabase.from('expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
+            earningsPromise = supabase.from('earnings').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
+            kmPromise = supabase.from('daily_km').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
+            creditsPromise = supabase.from('credits').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
+            recurringPromise = supabase.from('recurring_expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
+        }
+
         // Fetch profile and all other user-specific data concurrently
         const [
             profileResponse,
@@ -84,11 +100,11 @@ const App: React.FC = () => {
             recurringResponse
         ] = await Promise.all([
             supabase.from('profiles').select('*').eq('id', userId).maybeSingle().abortSignal(controller.signal as any),
-            supabase.from('expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
-            supabase.from('earnings').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
-            supabase.from('daily_km').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
-            supabase.from('credits').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
-            supabase.from('recurring_expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
+            expensesPromise,
+            earningsPromise,
+            kmPromise,
+            creditsPromise,
+            recurringPromise
         ]);
 
         if (controller.signal.aborted || !isMounted.current) return;
@@ -107,10 +123,10 @@ const App: React.FC = () => {
             // Force ADMIN role for the master user, regardless of DB state
             userToSet = {
                 id: userId,
-                name: profileData?.name || email.split('@')[0] || 'Admin',
+                name: profileData?.name || email.split('@')[0] || 'Admin Mestre', // More explicit name
                 email: email,
                 password: '',
-                role: 'ADMIN'
+                role: 'ADMIN' // Unquestionably ADMIN for the UI
             };
 
             // If the DB profile is missing or incorrect, update it.
@@ -124,7 +140,7 @@ const App: React.FC = () => {
                     name: userToSet.name
                 }, { onConflict: 'id' });
             }
-            fetchUsers(controller.signal);
+            fetchUsers(controller.signal); // Always fetch all users for the admin panel
 
         } else {
             // For regular users, trust the database or create a new profile if one doesn't exist
@@ -158,6 +174,7 @@ const App: React.FC = () => {
         
         if (isMounted.current) {
             setCurrentUser(userToSet);
+            console.log(`[DEBUG] Current user set: ${userToSet.email}, Role: ${userToSet.role}`);
         }
 
     } catch (err: any) {
