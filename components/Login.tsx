@@ -24,7 +24,7 @@ const Login: React.FC = () => {
       if (isSignUp) {
         // Apenas o e-mail do administrador master pode se cadastrar
         if (email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
-          setError("O cadastro de novos usuários é feito exclusivamente pelo administrador do sistema.");
+          setError("O cadastro de novos usuários é feito exclusivamente pelo administrador do sistema. Fale com ele para criar sua conta.");
           return; // Impede o signup
         }
 
@@ -40,8 +40,8 @@ const Login: React.FC = () => {
             setError(signUpError.message);
           }
         } else {
-          setSuccess('Conta de administrador criada com sucesso! Por favor, faça login.');
-          setIsSignUp(false); // Redireciona para o login após o cadastro
+          setSuccess('Conta de administrador criada com sucesso! Você já pode fazer login.');
+          setIsSignUp(false); // Redireciona para o login após o cadastro bem-sucedido
         }
       } else {
         const { error: authError } = await supabase.auth.signInWithPassword({
@@ -51,7 +51,7 @@ const Login: React.FC = () => {
 
         if (authError) {
           if (authError.message === 'Invalid login credentials') {
-            setError('E-mail ou senha incorretos. Verifique se sua conta foi cadastrada.');
+            setError('E-mail ou senha incorretos. Verifique seus dados ou fale com o administrador.');
           } else {
             setError(authError.message);
           }
@@ -79,7 +79,7 @@ const Login: React.FC = () => {
           </div>
           <h1 className="text-3xl font-black text-gray-800">FinControl<span className="text-blue-600">AI</span></h1>
           <p className="text-gray-500 mt-2 font-medium">
-            {isSignUp ? 'Cadastro para o Administrador Geral' : 'Acesse seu painel financeiro'}
+            {isSignUp ? 'Cadastro do Administrador Geral' : 'Acesse seu painel financeiro'}
           </p>
         </div>
 

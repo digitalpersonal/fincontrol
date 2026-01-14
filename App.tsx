@@ -11,7 +11,7 @@ import CreditHistory from './components/CreditHistory';
 import Login from './components/Login';
 import AdminPanel from './components/AdminPanel';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
-import { LayoutDashboard, Plus, List, Sparkles, Menu, X, Wallet, CreditCard, ShieldCheck, LogOut, Loader2, AlertTriangle } from 'lucide-react';
+import { LayoutDashboard, Plus, List, Sparkles, Menu, X, Wallet, CreditCard, ShieldCheck, LogOut, Loader2 } from 'lucide-react';
 
 const ADMIN_EMAIL = 'digitalpersonal@gmail.com';
 
@@ -36,11 +36,16 @@ const App: React.FC = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [expenseToEdit, setExpenseToEdit] = useState<Expense | null>(null);
 
-  const fetchUsers = useCallback(async () => {
+  const fetchUsers = useCallback(async (signal?: AbortSignal) => {
     if (!isSupabaseConfigured) return;
     try {
-      const { data, error } = await supabase.from('profiles').select('*');
-      if (error) throw error;
+      // Adicionando abortSignal para todas as chamadas Supabase para permitir cancelamento
+      const { data, error } = await supabase.from('profiles').select('*').abortSignal(signal as any);
+      if (error) {
+        // Ignorar erros de abortamento
+        if (error.message.includes('abort') || error.code === '20') return;
+        throw error;
+      }
       if (data && isMounted.current) {
         setAllUsers(data.map(p => ({
           id: p.id,
@@ -50,38 +55,43 @@ const App: React.FC = () => {
           role: p.role as 'ADMIN' | 'USER'
         })));
       }
-    } catch (err) {
-      console.warn("Acesso negado à lista de usuários ou erro de rede.");
+    } catch (err: any) {
+      // Ignorar erros de abortamento para não poluir o console ou disparar estados de erro desnecessários
+      if (err.name !== 'AbortError' && !err.message?.includes('aborted')) {
+        console.warn("Erro ao buscar usuários:", err);
+      }
     }
   }, []);
 
   const fetchData = useCallback(async (userId: string, email: string) => {
     if (!isSupabaseConfigured) return;
     
-    // Abort previous requests if they are still running
+    // Abortar requisições anteriores para evitar race conditions
     if (fetchController.current) {
       fetchController.current.abort();
     }
-    fetchController.current = new AbortController();
+    const controller = new AbortController();
+    fetchController.current = controller;
     
     setLoading(true);
 
     try {
+      // Usando Promise.allSettled para que uma falha não impeça as outras, e abortSignal
       const results = await Promise.allSettled([
-        supabase.from('expenses').select('*').eq('user_id', userId),
-        supabase.from('earnings').select('*').eq('user_id', userId),
-        supabase.from('daily_km').select('*').eq('user_id', userId),
-        supabase.from('credits').select('*').eq('user_id', userId),
-        supabase.from('recurring_expenses').select('*').eq('user_id', userId),
-        supabase.from('profiles').select('*').eq('id', userId).maybeSingle()
+        supabase.from('expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
+        supabase.from('earnings').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
+        supabase.from('daily_km').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
+        supabase.from('credits').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
+        supabase.from('recurring_expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
+        supabase.from('profiles').select('*').eq('id', userId).maybeSingle().abortSignal(controller.signal as any)
       ]);
 
-      if (!isMounted.current) return;
+      // Se o componente foi desmontado ou a requisição foi abortada, não atualize o estado
+      if (!isMounted.current || controller.signal.aborted) return;
 
       const [exp, ear, km, cred, rec, profResult] = results;
 
-      // Type-safe handling of PromiseSettledResult and fixing logic errors
-      // Use explicit status check and cast to access .value safely in TS
+      // Tratamento dos resultados de Promise.allSettled
       if (exp.status === 'fulfilled') {
         const val = (exp as PromiseFulfilledResult<any>).value;
         if (val?.data) setExpenses(val.data);
@@ -107,7 +117,9 @@ const App: React.FC = () => {
         if (val?.data) setRecurringExpenses(val.data);
       }
 
-      const forcedRole = email.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? 'ADMIN' : 
+      // Regra Master Admin: digitalpersonal@gmail.com sempre é ADMIN
+      const isMasterAdmin = email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+      const forcedRole = isMasterAdmin ? 'ADMIN' : 
                         (profResult.status === 'fulfilled' ? (profResult as PromiseFulfilledResult<any>).value.data?.role : 'USER');
       
       const profileData = profResult.status === 'fulfilled' ? (profResult as PromiseFulfilledResult<any>).value.data : null;
@@ -121,6 +133,7 @@ const App: React.FC = () => {
           role: forcedRole as 'ADMIN' | 'USER'
         });
       } else {
+        // Se o perfil não existe, cria um novo (especialmente para o admin master no primeiro login)
         const { data: newProf } = await supabase.from('profiles').upsert({
           id: userId,
           name: email.split('@')[0] || 'Usuário',
@@ -140,15 +153,17 @@ const App: React.FC = () => {
       }
 
       if (forcedRole === 'ADMIN') {
-        fetchUsers();
+        fetchUsers(controller.signal);
       }
 
     } catch (err: any) {
-      if (err.name !== 'AbortError') {
+      // Ignorar erros de abortamento
+      if (err.name !== 'AbortError' && !err.message?.includes('aborted')) {
         console.error("Erro ao carregar dados:", err);
       }
     } finally {
-      if (isMounted.current) {
+      // Apenas defina loading como false se o componente ainda estiver montado e a requisição não foi abortada
+      if (isMounted.current && !controller.signal.aborted) {
         setLoading(false);
       }
     }
@@ -157,26 +172,16 @@ const App: React.FC = () => {
   useEffect(() => {
     isMounted.current = true;
     
-    const checkSession = async () => {
-      const { data: { session: activeSession } } = await supabase.auth.getSession();
-      if (isMounted.current) {
-        setSession(activeSession);
-        if (activeSession?.user) {
-          fetchData(activeSession.user.id, activeSession.user.email || '');
-        } else {
-          setLoading(false);
-        }
-      }
-    };
-
-    checkSession();
-
+    // Listener para mudanças no estado de autenticação
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
       if (!isMounted.current) return;
+      
       setSession(newSession);
+      
       if (newSession?.user) {
         fetchData(newSession.user.id, newSession.user.email || '');
       } else {
+        // Limpar estados ao deslogar
         setCurrentUser(null);
         setExpenses([]);
         setEarnings([]);
@@ -186,7 +191,10 @@ const App: React.FC = () => {
 
     return () => {
       isMounted.current = false;
-      if (fetchController.current) fetchController.current.abort();
+      // Abortar qualquer requisição pendente ao desmontar o componente
+      if (fetchController.current) {
+        fetchController.current.abort();
+      }
       subscription.unsubscribe();
     };
   }, [fetchData]);
@@ -206,25 +214,23 @@ const App: React.FC = () => {
       email: user.email,
       role: 'USER'
     });
-    if (!error) fetchUsers();
+    if (!error) fetchUsers(); // Re-fetch users list
   };
 
   const handleDeleteUser = async (id: string) => {
     if (currentUser?.role !== 'ADMIN') return;
     const { error } = await supabase.from('profiles').delete().eq('id', id);
-    if (!error) fetchUsers();
+    if (!error) fetchUsers(); // Re-fetch users list
   };
 
   const handleAddExpense = async (exp: Expense) => {
     if (!session?.user) return;
-    const { id, ...expData } = exp;
-    const isNew = exp.id.includes('-') && exp.id.length > 30;
-    const payload = isNew ? { ...expData, user_id: session.user.id } : { ...exp, user_id: session.user.id };
-    
+    // O id do expense já vem do form (randomUUID para novos, existente para edições)
+    const payload = { ...exp, user_id: session.user.id };
     const { data, error } = await supabase.from('expenses').upsert(payload).select().single();
     if (!error && data) {
       setExpenses(prev => [...prev.filter(e => e.id !== exp.id), data]);
-      setView('LIST');
+      setView('LIST'); // Navigate to list after add/edit
     }
   };
 
@@ -338,9 +344,17 @@ const App: React.FC = () => {
         )}
 
         <footer className="mt-20 pt-10 border-t border-gray-200 pb-16">
-            <div className="text-center flex flex-col items-center justify-center space-y-1">
-                <p className="text-[10px] md:text-sm font-black text-gray-500 uppercase tracking-widest">Multiplus - Sistemas Inteligentes</p>
-                <p className="text-[10px] md:text-sm font-black text-gray-500 uppercase tracking-widest">Silvio T. de Sá Filho</p>
+            <div className="text-center flex flex-col items-center justify-center space-y-2">
+                <p className="text-xs md:text-sm font-semibold text-gray-600">
+                    &copy; {new Date().getFullYear()} FinControl AI. Todos os direitos reservados.
+                </p>
+                <div className="h-px w-16 bg-gray-200"></div>
+                <p className="text-[10px] md:text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Desenvolvido por Multiplus - Sistemas Inteligentes
+                </p>
+                <p className="text-[10px] md:text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Silvio T. de Sá Filho
+                </p>
             </div>
         </footer>
       </main>
