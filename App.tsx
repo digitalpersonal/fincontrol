@@ -64,6 +64,22 @@ const App: React.FC = () => {
           password: '',
           role: prof.role || 'USER'
         });
+      } else {
+        // Se não houver perfil, cria um básico
+        const { data: newProf } = await supabase.from('profiles').insert({
+          id: userId,
+          name: session?.user?.email?.split('@')[0] || 'Motorista',
+          role: 'USER'
+        }).select().single();
+        if (newProf) {
+          setCurrentUser({
+            id: newProf.id,
+            name: newProf.name,
+            email: session?.user?.email || '',
+            password: '',
+            role: newProf.role
+          });
+        }
       }
     } catch (err) {
       console.error("Erro ao carregar dados:", err);
@@ -109,10 +125,11 @@ const App: React.FC = () => {
   const handleAddExpense = async (exp: Expense, rec?: RecurringExpense) => {
     if (!session?.user) return;
     
-    const { data, error } = await supabase.from('expenses').upsert({
-      ...exp,
-      user_id: session.user.id
-    }).select().single();
+    // Removemos o ID temporário para o Supabase gerar um novo se for inserção
+    const { id, ...expData } = exp;
+    const payload = exp.id.includes('-') && exp.id.length > 30 ? { ...expData, user_id: session.user.id } : { ...exp, user_id: session.user.id };
+
+    const { data, error } = await supabase.from('expenses').upsert(payload).select().single();
 
     if (!error && data) {
       setExpenses(prev => {
@@ -179,12 +196,11 @@ const App: React.FC = () => {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 text-blue-600">
         <Loader2 className="animate-spin mb-4" size={48} />
-        <p className="font-bold animate-pulse">Iniciando FinControl AI...</p>
+        <p className="font-bold animate-pulse">Sincronizando com Supabase...</p>
       </div>
     );
   }
 
-  // Alerta de configuração pendente
   if (!isSupabaseConfigured) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6">
@@ -192,18 +208,17 @@ const App: React.FC = () => {
           <div className="inline-flex items-center justify-center w-16 h-16 bg-amber-50 rounded-full text-amber-500 mb-6">
             <AlertTriangle size={32} />
           </div>
-          <h2 className="text-2xl font-black text-gray-800 mb-2">Supabase Não Configurado</h2>
+          <h2 className="text-2xl font-black text-gray-800 mb-2">Erro de Configuração</h2>
           <p className="text-gray-500 mb-6">
-            Para que o sistema funcione, você precisa configurar as variáveis <strong>SUPABASE_URL</strong> e <strong>SUPABASE_ANON_KEY</strong> no seu ambiente.
+            As credenciais do Supabase não foram detectadas ou são inválidas. Verifique o arquivo <strong>lib/supabase.ts</strong>.
           </p>
-          <div className="bg-gray-50 p-4 rounded-xl text-left text-xs font-mono text-gray-600 mb-6">
-            SUPABASE_URL=https://xyz.supabase.co<br/>
-            SUPABASE_ANON_KEY=sua-chave-anonima
+          <div className="bg-gray-50 p-4 rounded-xl text-left text-xs font-mono text-gray-600 mb-6 break-all">
+            URL: https://aalgcrxkwaaokihqsrrk.supabase.co
           </div>
-          <p className="text-[10px] text-gray-400 uppercase font-bold tracking-widest leading-relaxed">
-            Desenvolvido por Multiplus - Sistemas Inteligentes<br/>
-            Silvio T. de Sá Filho
-          </p>
+          <div className="text-center flex flex-col items-center justify-center space-y-1">
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Desenvolvido por Multiplus - Sistemas Inteligentes</p>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Silvio T. de Sá Filho</p>
+          </div>
         </div>
       </div>
     );
@@ -300,11 +315,11 @@ const App: React.FC = () => {
         )}
 
         <footer className="mt-20 pt-10 border-t border-gray-200 pb-16 print:hidden">
-            <div className="text-center flex flex-col items-center justify-center space-y-2">
-                <p className="text-[10px] md:text-sm font-bold text-gray-500 tracking-wide">
+            <div className="text-center flex flex-col items-center justify-center space-y-1">
+                <p className="text-[10px] md:text-sm font-black text-gray-500 uppercase tracking-widest">
                     Desenvolvido por Multiplus - Sistemas Inteligentes
                 </p>
-                <p className="text-[10px] md:text-sm font-bold text-gray-500 tracking-wide">
+                <p className="text-[10px] md:text-sm font-black text-gray-500 uppercase tracking-widest">
                     Silvio T. de Sá Filho
                 </p>
             </div>

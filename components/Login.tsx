@@ -106,10 +106,10 @@ const Login: React.FC<LoginProps> = () => {
             </p>
             
             <div className="pt-2 space-y-1">
-              <p className="text-[10px] font-black text-gray-400 leading-tight">
+              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest leading-tight">
                 Desenvolvido por Multiplus - Sistemas Inteligentes
               </p>
-              <p className="text-[10px] font-black text-gray-400 leading-tight">
+              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest leading-tight">
                 Silvio T. de Sá Filho
               </p>
             </div>
