@@ -10,8 +10,9 @@ import DailyFlow from './components/DailyFlow';
 import CreditHistory from './components/CreditHistory';
 import Login from './components/Login';
 import AdminPanel from './components/AdminPanel';
+import InstallGuide from './components/InstallGuide';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
-import { LayoutDashboard, Plus, List, Sparkles, Menu, X, Wallet, CreditCard, ShieldCheck, LogOut, Loader2 } from 'lucide-react';
+import { LayoutDashboard, Plus, List, Sparkles, Menu, X, Wallet, CreditCard, ShieldCheck, LogOut, Loader2, Download } from 'lucide-react';
 
 const ADMIN_EMAIL = 'digitalpersonal@gmail.com';
 
@@ -20,11 +21,14 @@ const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   
+  // PWA Install State
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showInstallGuide, setShowInstallGuide] = useState(false);
+
   const isMounted = useRef(true);
   const fetchController = useRef<AbortController | null>(null);
 
   // Data States
-  // Initialize categories from LocalStorage if available, otherwise use defaults
   const [categories, setCategories] = useState<string[]>(() => {
     const saved = localStorage.getItem('expenseCategories');
     return saved ? JSON.parse(saved) : DEFAULT_CATEGORIES;
@@ -54,6 +58,20 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('earningCategories', JSON.stringify(earningCategories));
   }, [earningCategories]);
+
+  // PWA Install Event Listener
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
 
   const fetchUsers = useCallback(async (signal?: AbortSignal) => {
     if (!isSupabaseConfigured) return;
@@ -146,7 +164,6 @@ const App: React.FC = () => {
 
         if (controller.signal.aborted || !isMounted.current) return;
 
-        // Set all data states
         setExpenses(expensesResponse.data || []);
         setEarnings(earningsResponse.data || []);
         setKmEntries(kmResponse.data || []);
@@ -165,7 +182,6 @@ const App: React.FC = () => {
                 status: 'ACTIVE'
             };
 
-            // Force admin role in DB if missing
             if (!profileData || profileData.role !== 'ADMIN') {
                 await supabase.from('profiles').upsert({
                     id: userId,
@@ -188,7 +204,6 @@ const App: React.FC = () => {
                     status: profileData.status || 'ACTIVE'
                 };
             } else {
-                console.warn(`Profile not found for user ${userId}. Creating a new one.`);
                 const { data: newProfile } = await supabase.from('profiles').insert({
                     id: userId,
                     name: email.split('@')[0] || 'Novo Usuário',
@@ -282,7 +297,6 @@ const App: React.FC = () => {
         });
 
         if (authError) {
-            console.error("Error creating auth user:", authError);
             let errorMessage = `Erro ao criar usuário: ${authError.message}`;
             if (authError.message.includes('already registered')) {
                 errorMessage = `Este e-mail já está cadastrado. Por favor, use outro.`;
@@ -291,7 +305,6 @@ const App: React.FC = () => {
             return false;
         }
 
-        // Ensure profile is created with correct status
         if (authData.user) {
             await supabase.from('profiles').upsert({
                 id: authData.user.id,
@@ -327,8 +340,6 @@ const App: React.FC = () => {
 
   const handleToggleUserStatus = async (id: string, newStatus: 'ACTIVE' | 'BLOCKED') => {
     if (currentUser?.role !== 'ADMIN') return;
-    
-    // Check if trying to block self (redundancy check)
     if (id === currentUser?.id) {
         alert("Você não pode bloquear a si mesmo.");
         return;
@@ -337,12 +348,8 @@ const App: React.FC = () => {
     try {
         const { error } = await supabase.from('profiles').update({ status: newStatus }).eq('id', id);
         if (error) throw error;
-        
-        // Update local state immediately for better UX
         setAllUsers(prev => prev.map(u => u.id === id ? { ...u, status: newStatus } : u));
-        
     } catch (error: any) {
-        console.error("Erro ao alterar status:", error);
         alert("Erro ao alterar status do usuário.");
     }
   };
@@ -426,6 +433,15 @@ const App: React.FC = () => {
             <NavButton target="CREDIT_HISTORY" icon={<CreditCard size={18} />} label="Crédito" />
             <NavButton target="LIST" icon={<List size={18} />} label="Histórico" />
             <NavButton target="AI_ADVISOR" icon={<Sparkles size={18} />} label="IA" />
+            
+            <button 
+                onClick={() => setShowInstallGuide(true)}
+                className="flex items-center px-3 py-2 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 transition ml-2"
+                title="Instalar App"
+            >
+                <Download size={18} className="mr-1"/> <span className="text-sm font-bold">App</span>
+            </button>
+
             <div className="h-8 w-px bg-gray-200 mx-2"></div>
             <button onClick={handleLogout} className="p-3 text-gray-400 hover:text-red-600 rounded-xl transition">
                 <LogOut size={20} />
@@ -449,6 +465,11 @@ const App: React.FC = () => {
            <NavButton target="CREDIT_HISTORY" icon={<CreditCard size={18} />} label="Dívidas e Crédito" />
            <NavButton target="LIST" icon={<List size={18} />} label="Histórico" />
            <NavButton target="AI_ADVISOR" icon={<Sparkles size={18} />} label="IA Driver" />
+           
+           <button onClick={() => { setShowInstallGuide(true); setMobileMenuOpen(false); }} className="w-full flex items-center justify-center px-4 py-3 rounded-xl bg-indigo-50 text-indigo-600 font-bold mt-2">
+               <Download size={18} className="mr-2" /> Instalar Aplicativo
+           </button>
+
            <button onClick={handleLogout} className="w-full flex items-center justify-center px-4 py-3 rounded-xl bg-red-50 text-red-600 font-bold mt-2">
                <LogOut size={18} className="mr-2" /> Sair
            </button>
@@ -518,6 +539,12 @@ const App: React.FC = () => {
             <List size={24} /><span className="text-[10px] font-bold mt-1">Lista</span>
         </button>
       </div>
+
+      <InstallGuide 
+        isOpen={showInstallGuide} 
+        onClose={() => setShowInstallGuide(false)} 
+        installPrompt={deferredPrompt} 
+      />
     </div>
   );
 };

@@ -1,7 +1,7 @@
 
 {
   "name": "FinControl AI",
-  "short_name": "FinControl",
+  "short_name": "FinControl AI",
   "description": "Um gerenciador financeiro inteligente para controlar despesas de carro, casa e consumo, potencializado pela IA Gemini para insights de economia.",
   "start_url": "./",
   "display": "standalone",
