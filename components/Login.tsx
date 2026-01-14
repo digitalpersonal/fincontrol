@@ -1,31 +1,47 @@
 
 import React, { useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { Lock, Mail, LogIn, ShieldAlert, MessageCircle, Loader2 } from 'lucide-react';
+import { Lock, Mail, LogIn, ShieldAlert, MessageCircle, Loader2, Eye, EyeOff, UserPlus } from 'lucide-react';
 
-interface LoginProps {
-  onLogin: (email: string, pass: string) => boolean;
-}
-
-const Login: React.FC<LoginProps> = () => {
+const Login: React.FC = () => {
+  const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setSuccess(null);
     
-    const { error: authError } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    if (isSignUp) {
+      const { error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
+      });
 
-    if (authError) {
-      setError(authError.message === 'Invalid login credentials' ? 'E-mail ou senha incorretos.' : authError.message);
-      setLoading(false);
+      if (signUpError) {
+        setError(signUpError.message);
+        setLoading(false);
+      } else {
+        setSuccess('Conta criada com sucesso! Verifique seu e-mail ou tente fazer login.');
+        setIsSignUp(false);
+        setLoading(false);
+      }
+    } else {
+      const { error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (authError) {
+        setError(authError.message === 'Invalid login credentials' ? 'E-mail ou senha incorretos.' : authError.message);
+        setLoading(false);
+      }
     }
   };
 
@@ -39,10 +55,27 @@ const Login: React.FC<LoginProps> = () => {
       <div className="max-w-md w-full bg-white rounded-3xl shadow-2xl p-8 border border-gray-100 animate-fade-in">
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-600 rounded-2xl text-white mb-4 shadow-lg">
-            <LogIn size={32} />
+            {isSignUp ? <UserPlus size={32} /> : <LogIn size={32} />}
           </div>
           <h1 className="text-3xl font-black text-gray-800">FinControl<span className="text-blue-600">AI</span></h1>
-          <p className="text-gray-500 mt-2 font-medium">Acesse seu painel financeiro</p>
+          <p className="text-gray-500 mt-2 font-medium">
+            {isSignUp ? 'Crie sua conta administrativa' : 'Acesse seu painel financeiro'}
+          </p>
+        </div>
+
+        <div className="flex p-1 bg-gray-100 rounded-2xl mb-6">
+          <button 
+            onClick={() => { setIsSignUp(false); setError(null); setSuccess(null); }}
+            className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition ${!isSignUp ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
+          >
+            Entrar
+          </button>
+          <button 
+            onClick={() => { setIsSignUp(true); setError(null); setSuccess(null); }}
+            className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition ${isSignUp ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
+          >
+            Cadastrar
+          </button>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
@@ -66,20 +99,34 @@ const Login: React.FC<LoginProps> = () => {
             <div className="relative">
               <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
               <input
-                type="password"
+                type={showPassword ? "text" : "password"}
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full pl-12 pr-4 py-4 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none transition"
+                className="w-full pl-12 pr-12 py-4 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none transition"
                 placeholder="••••••••"
               />
+              <button 
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-blue-600 transition"
+              >
+                {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+              </button>
             </div>
           </div>
 
           {error && (
             <div className="flex items-center gap-2 p-4 bg-red-50 text-red-600 rounded-2xl text-sm font-bold border border-red-100 animate-fade-in">
               <ShieldAlert size={18} />
-              {error}
+              <span className="break-words">{error}</span>
+            </div>
+          )}
+
+          {success && (
+            <div className="flex items-center gap-2 p-4 bg-emerald-50 text-emerald-600 rounded-2xl text-sm font-bold border border-emerald-100 animate-fade-in">
+              <LogIn size={18} />
+              {success}
             </div>
           )}
 
@@ -88,7 +135,7 @@ const Login: React.FC<LoginProps> = () => {
             disabled={loading}
             className="w-full py-4 bg-blue-600 text-white font-black rounded-2xl shadow-xl hover:bg-blue-700 active:scale-95 transition-all text-lg flex justify-center items-center"
           >
-            {loading ? <Loader2 className="animate-spin mr-2" /> : 'ENTRAR NO SISTEMA'}
+            {loading ? <Loader2 className="animate-spin mr-2" /> : (isSignUp ? 'CRIAR MINHA CONTA' : 'ENTRAR NO SISTEMA')}
           </button>
         </form>
 
