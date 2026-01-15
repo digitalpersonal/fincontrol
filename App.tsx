@@ -140,13 +140,14 @@ const App: React.FC = () => {
         let creditsPromise = Promise.resolve({ data: [] });
         let recurringPromise = Promise.resolve({ data: [] });
 
-        if (!isMasterAdmin) {
-            expensesPromise = supabase.from('expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
-            earningsPromise = supabase.from('earnings').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
-            kmPromise = supabase.from('daily_km').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
-            creditsPromise = supabase.from('credits').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
-            recurringPromise = supabase.from('recurring_expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
-        }
+        // IMPORTANT: Admins (Master or DB Role) might want to see their own data, 
+        // OR we might want them to see everything. For now, assuming standard flow for their own data.
+        // We fetch data for everyone to populate dashboards.
+        expensesPromise = supabase.from('expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
+        earningsPromise = supabase.from('earnings').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
+        kmPromise = supabase.from('daily_km').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
+        creditsPromise = supabase.from('credits').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
+        recurringPromise = supabase.from('recurring_expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
 
         const [
             expensesResponse,
@@ -182,8 +183,7 @@ const App: React.FC = () => {
                 status: 'ACTIVE'
             };
             
-            // NOTE: We don't manually create admin profile here to avoid race conditions. 
-            // The DB trigger handles it. We just use what's returned.
+            // Trigger fetchUsers for Master Admin
             fetchUsers(controller.signal);
 
         } else {
@@ -196,6 +196,11 @@ const App: React.FC = () => {
                     role: profileData.role as 'ADMIN' | 'USER',
                     status: profileData.status || 'ACTIVE'
                 };
+
+                // IMPORTANT: If the database says this user is ADMIN, fetch the user list
+                if (profileData.role === 'ADMIN') {
+                    fetchUsers(controller.signal);
+                }
             } else {
                 // FALLBACK: If trigger failed or slow, show temporary data.
                 userToSet = {
