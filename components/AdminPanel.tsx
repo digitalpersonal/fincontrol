@@ -1,16 +1,17 @@
 
 import React, { useState } from 'react';
 import { User } from '../types';
-import { UserPlus, Users, ShieldCheck, Mail, Lock, User as UserIcon, Trash2, X, MessageCircle, Eye, EyeOff, CheckCircle, Ban, Unlock } from 'lucide-react';
+import { UserPlus, Users, ShieldCheck, Mail, Lock, User as UserIcon, Trash2, X, MessageCircle, Eye, EyeOff, CheckCircle, Ban, Unlock, RefreshCw } from 'lucide-react';
 
 interface AdminPanelProps {
   users: User[];
   onAddUser: (user: User) => Promise<boolean>;
   onDeleteUser: (id: string) => void;
   onToggleStatus: (id: string, newStatus: 'ACTIVE' | 'BLOCKED') => void;
+  onRefresh?: () => void;
 }
 
-const AdminPanel: React.FC<AdminPanelProps> = ({ users, onAddUser, onDeleteUser, onToggleStatus }) => {
+const AdminPanel: React.FC<AdminPanelProps> = ({ users, onAddUser, onDeleteUser, onToggleStatus, onRefresh }) => {
   const [showAdd, setShowAdd] = useState(false);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -69,12 +70,23 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ users, onAddUser, onDeleteUser,
           </h2>
           <p className="text-gray-500 text-sm font-medium">Administração central do sistema</p>
         </div>
-        <button 
-          onClick={() => { setShowAdd(!showAdd); setLastCreatedUserCredentials(null); }} 
-          className="bg-blue-600 text-white p-3 rounded-2xl shadow-lg hover:bg-blue-700 transition active:scale-95"
-        >
-          {showAdd ? <X size={24} /> : <UserPlus size={24} />}
-        </button>
+        <div className="flex gap-2">
+            {onRefresh && (
+                <button 
+                  onClick={onRefresh}
+                  className="bg-white text-gray-500 p-3 rounded-2xl shadow-sm border border-gray-100 hover:text-blue-600 hover:border-blue-100 transition"
+                  title="Atualizar Lista"
+                >
+                  <RefreshCw size={24} />
+                </button>
+            )}
+            <button 
+              onClick={() => { setShowAdd(!showAdd); setLastCreatedUserCredentials(null); }} 
+              className="bg-blue-600 text-white p-3 rounded-2xl shadow-lg hover:bg-blue-700 transition active:scale-95"
+            >
+              {showAdd ? <X size={24} /> : <UserPlus size={24} />}
+            </button>
+        </div>
       </div>
 
       {lastCreatedUserCredentials && (
@@ -169,6 +181,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ users, onAddUser, onDeleteUser,
                 <Users size={14} className="mr-2" /> Clientes Ativos ({users.length})
             </h3>
         </div>
+        
+        {users.length === 0 && (
+            <div className="p-8 text-center">
+                <p className="text-gray-400 text-sm mb-2">Nenhum cliente encontrado.</p>
+                <p className="text-gray-300 text-xs">Verifique as permissões ou clique em Atualizar.</p>
+            </div>
+        )}
+
         <div className="divide-y divide-gray-100">
             {users.map(u => {
                 const isBlocked = u.status === 'BLOCKED';

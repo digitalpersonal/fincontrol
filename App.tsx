@@ -76,9 +76,16 @@ const App: React.FC = () => {
   const fetchUsers = useCallback(async (signal?: AbortSignal) => {
     if (!isSupabaseConfigured) return;
     try {
-      const { data, error } = await supabase.from('profiles').select('*').abortSignal(signal as any);
+      // Added ordering to make list stable
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .order('name', { ascending: true })
+        .abortSignal(signal as any);
+
       if (error) {
         if (error.message.includes('abort') || error.code === '20') return;
+        console.error("Erro crítico ao buscar usuários (verifique RLS policies):", error);
         throw error;
       }
       if (data && isMounted.current) {
@@ -140,9 +147,7 @@ const App: React.FC = () => {
         let creditsPromise = Promise.resolve({ data: [] });
         let recurringPromise = Promise.resolve({ data: [] });
 
-        // IMPORTANT: Admins (Master or DB Role) might want to see their own data, 
-        // OR we might want them to see everything. For now, assuming standard flow for their own data.
-        // We fetch data for everyone to populate dashboards.
+        // Fetch data based on context
         expensesPromise = supabase.from('expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
         earningsPromise = supabase.from('earnings').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
         kmPromise = supabase.from('daily_km').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
@@ -183,7 +188,20 @@ const App: React.FC = () => {
                 status: 'ACTIVE'
             };
             
-            // Trigger fetchUsers for Master Admin
+            // SELF-HEALING: Se for o master admin, garante que a role no banco seja ADMIN
+            // Isso previne que erros de trigger deixem o admin sem permissão
+            if (!profileData || profileData.role !== 'ADMIN') {
+                 console.log("Auto-repair: Corrigindo permissões do Admin Mestre...");
+                 await supabase.from('profiles').upsert({
+                     id: userId,
+                     email: email,
+                     name: userToSet.name,
+                     role: 'ADMIN',
+                     status: 'ACTIVE'
+                 }, { onConflict: 'id' });
+            }
+
+            // Busca a lista de usuários
             fetchUsers(controller.signal);
 
         } else {
@@ -197,12 +215,11 @@ const App: React.FC = () => {
                     status: profileData.status || 'ACTIVE'
                 };
 
-                // IMPORTANT: If the database says this user is ADMIN, fetch the user list
+                // Se o banco diz que é ADMIN, busca a lista
                 if (profileData.role === 'ADMIN') {
                     fetchUsers(controller.signal);
                 }
             } else {
-                // FALLBACK: If trigger failed or slow, show temporary data.
                 userToSet = {
                     id: userId,
                     name: email.split('@')[0],
@@ -282,7 +299,7 @@ const App: React.FC = () => {
             password: userToAdd.password,
             options: {
                 data: {
-                    name: userToAdd.name, // The trigger uses this meta_data to create the profile
+                    name: userToAdd.name,
                 }
             }
         });
@@ -297,10 +314,9 @@ const App: React.FC = () => {
         }
 
         if (authData.user) {
+            // Recarrega a lista após adicionar
+            await fetchUsers(); 
             alert(`Usuário "${userToAdd.name}" criado com sucesso!`);
-            // Note: Triggering signUp logs the new user in on the client side.
-            // This will cause a re-render and logout the admin. This is expected behavior for client-side SDK.
-            // The admin will need to log back in or we accept this flow.
             return true;
         } else {
             alert(`Usuário "${userToAdd.name}" registrado! Verifique o e-mail.`);
@@ -509,7 +525,13 @@ const App: React.FC = () => {
         {view === 'AI_ADVISOR' && <AIAdvisor expenses={expenses} />}
         {view === 'CREDIT_HISTORY' && <CreditHistory credits={credits} onAddCredit={handleAddCredit} onDeleteCredit={handleDeleteCredit} onUpdateCredit={handleUpdateCredit} />}
         {view === 'ADMIN_PANEL' && currentUser?.role === 'ADMIN' && (
-          <AdminPanel users={allUsers} onAddUser={handleAddUser} onDeleteUser={handleDeleteUser} onToggleStatus={handleToggleUserStatus} />
+          <AdminPanel 
+            users={allUsers} 
+            onAddUser={handleAddUser} 
+            onDeleteUser={handleDeleteUser} 
+            onToggleStatus={handleToggleUserStatus} 
+            onRefresh={() => fetchUsers()}
+          />
         )}
 
         <footer className="mt-20 pt-10 border-t border-gray-200 pb-16">
