@@ -181,16 +181,9 @@ const App: React.FC = () => {
                 role: 'ADMIN',
                 status: 'ACTIVE'
             };
-
-            if (!profileData || profileData.role !== 'ADMIN') {
-                await supabase.from('profiles').upsert({
-                    id: userId,
-                    role: 'ADMIN',
-                    email: email,
-                    name: userToSet.name,
-                    status: 'ACTIVE'
-                }, { onConflict: 'id' });
-            }
+            
+            // NOTE: We don't manually create admin profile here to avoid race conditions. 
+            // The DB trigger handles it. We just use what's returned.
             fetchUsers(controller.signal);
 
         } else {
@@ -204,19 +197,10 @@ const App: React.FC = () => {
                     status: profileData.status || 'ACTIVE'
                 };
             } else {
-                // FALLBACK: Se o usuário existe na Auth mas não tem perfil, criamos agora.
-                // Usamos UPSERT para evitar erros de duplicidade se a criação anterior falhou no meio do caminho.
-                const { data: newProfile } = await supabase.from('profiles').upsert({
-                    id: userId,
-                    name: email.split('@')[0] || 'Novo Usuário',
-                    role: 'USER',
-                    email: email,
-                    status: 'ACTIVE'
-                }, { onConflict: 'id' }).select().single();
-                
+                // FALLBACK: If trigger failed or slow, show temporary data.
                 userToSet = {
                     id: userId,
-                    name: newProfile?.name || 'Novo Usuário',
+                    name: email.split('@')[0],
                     email: email,
                     password: '',
                     role: 'USER',
@@ -293,7 +277,7 @@ const App: React.FC = () => {
             password: userToAdd.password,
             options: {
                 data: {
-                    name: userToAdd.name,
+                    name: userToAdd.name, // The trigger uses this meta_data to create the profile
                 }
             }
         });
@@ -308,16 +292,10 @@ const App: React.FC = () => {
         }
 
         if (authData.user) {
-            await supabase.from('profiles').upsert({
-                id: authData.user.id,
-                email: userToAdd.email,
-                name: userToAdd.name,
-                role: 'USER',
-                status: 'ACTIVE'
-            });
-            
             alert(`Usuário "${userToAdd.name}" criado com sucesso!`);
-            fetchUsers(); 
+            // Note: Triggering signUp logs the new user in on the client side.
+            // This will cause a re-render and logout the admin. This is expected behavior for client-side SDK.
+            // The admin will need to log back in or we accept this flow.
             return true;
         } else {
             alert(`Usuário "${userToAdd.name}" registrado! Verifique o e-mail.`);

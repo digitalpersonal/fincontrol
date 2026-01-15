@@ -3,8 +3,6 @@ import React, { useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Lock, Mail, LogIn, ShieldAlert, MessageCircle, Loader2, Eye, EyeOff, UserPlus, Ban } from 'lucide-react';
 
-const ADMIN_EMAIL = 'digitalpersonal@gmail.com'; // Definido como o e-mail do administrador master
-
 const Login: React.FC = () => {
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
@@ -22,10 +20,15 @@ const Login: React.FC = () => {
     
     try {
       if (isSignUp) {
-        // Cadastro liberado para todos
+        // O Trigger no banco de dados cria o perfil automaticamente
         const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
           email,
           password,
+          options: {
+            data: {
+              name: email.split('@')[0] // Passa o nome para o trigger usar
+            }
+          }
         });
 
         if (signUpError) {
@@ -35,24 +38,9 @@ const Login: React.FC = () => {
             setError(signUpError.message);
           }
         } else if (signUpData.user) {
-          // Criar perfil inicial automaticamente
-          // Usamos upsert para evitar erros se houver triggers no banco que já criam o perfil
-          const { error: profileError } = await supabase.from('profiles').upsert({
-            id: signUpData.user.id,
-            email: email,
-            name: email.split('@')[0],
-            role: email.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? 'ADMIN' : 'USER',
-            status: 'ACTIVE'
-          });
-
-          if (profileError) {
-            console.error("Erro ao criar perfil:", profileError);
-            setError("Conta de autenticação criada, mas houve um erro ao salvar o perfil. Tente fazer login.");
-            setIsSignUp(false); 
-          } else {
-            setSuccess('Conta criada com sucesso! Você já pode fazer login.');
-            setIsSignUp(false);
-          }
+          // Sucesso - o Trigger criou o perfil
+          setSuccess('Conta criada com sucesso! Faça login para acessar.');
+          setIsSignUp(false);
         }
       } else {
         const { data: signInData, error: authError } = await supabase.auth.signInWithPassword({
@@ -69,7 +57,7 @@ const Login: React.FC = () => {
           return;
         }
 
-        // Verificar se o usuário está BLOQUEADO
+        // Verificar status de bloqueio
         if (signInData.user) {
             const { data: profile } = await supabase
                 .from('profiles')
