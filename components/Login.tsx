@@ -20,13 +20,14 @@ const Login: React.FC = () => {
     
     try {
       if (isSignUp) {
-        // O Trigger no banco de dados cria o perfil automaticamente
+        // 1. Tenta criar o usuário na autenticação
+        // O Trigger SQL deve tentar criar o perfil, mas se falhar, o cadastro ocorre mesmo assim.
         const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
           email,
           password,
           options: {
             data: {
-              name: email.split('@')[0] // Passa o nome para o trigger usar
+              name: email.split('@')[0]
             }
           }
         });
@@ -38,7 +39,21 @@ const Login: React.FC = () => {
             setError(signUpError.message);
           }
         } else if (signUpData.user) {
-          // Sucesso - o Trigger criou o perfil
+          // 2. REDUNDÂNCIA DE SEGURANÇA (FALLBACK)
+          // Se o usuário foi criado, forçamos a criação/atualização do perfil manualmente
+          // Isso garante que funcione mesmo se o Trigger do banco falhar.
+          const { error: profileError } = await supabase.from('profiles').upsert({
+             id: signUpData.user.id,
+             email: email,
+             name: email.split('@')[0],
+             role: 'USER',
+             status: 'ACTIVE'
+          }, { onConflict: 'id' });
+
+          if (profileError) {
+             console.warn("Aviso: Falha na criação manual do perfil (pode já ter sido criado pelo trigger):", profileError);
+          }
+
           setSuccess('Conta criada com sucesso! Faça login para acessar.');
           setIsSignUp(false);
         }
