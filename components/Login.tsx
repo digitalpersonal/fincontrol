@@ -36,7 +36,8 @@ const Login: React.FC = () => {
           }
         } else if (signUpData.user) {
           // Criar perfil inicial automaticamente
-          const { error: profileError } = await supabase.from('profiles').insert({
+          // Usamos upsert para evitar erros se houver triggers no banco que já criam o perfil
+          const { error: profileError } = await supabase.from('profiles').upsert({
             id: signUpData.user.id,
             email: email,
             name: email.split('@')[0],
@@ -46,10 +47,12 @@ const Login: React.FC = () => {
 
           if (profileError) {
             console.error("Erro ao criar perfil:", profileError);
+            setError("Conta de autenticação criada, mas houve um erro ao salvar o perfil. Tente fazer login.");
+            setIsSignUp(false); 
+          } else {
+            setSuccess('Conta criada com sucesso! Você já pode fazer login.');
+            setIsSignUp(false);
           }
-
-          setSuccess('Conta criada com sucesso! Você já pode fazer login.');
-          setIsSignUp(false);
         }
       } else {
         const { data: signInData, error: authError } = await supabase.auth.signInWithPassword({

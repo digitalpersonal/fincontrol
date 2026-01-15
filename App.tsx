@@ -12,7 +12,7 @@ import Login from './components/Login';
 import AdminPanel from './components/AdminPanel';
 import InstallGuide from './components/InstallGuide';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
-import { LayoutDashboard, Plus, List, Sparkles, Menu, X, Wallet, CreditCard, ShieldCheck, LogOut, Loader2, Download } from 'lucide-react';
+import { LayoutDashboard, Plus, List, Sparkles, Menu, X, Wallet, CreditCard, ShieldCheck, LogOut, Loader2, Download, Repeat } from 'lucide-react';
 
 const ADMIN_EMAIL = 'digitalpersonal@gmail.com';
 
@@ -204,13 +204,15 @@ const App: React.FC = () => {
                     status: profileData.status || 'ACTIVE'
                 };
             } else {
-                const { data: newProfile } = await supabase.from('profiles').insert({
+                // FALLBACK: Se o usuário existe na Auth mas não tem perfil, criamos agora.
+                // Usamos UPSERT para evitar erros de duplicidade se a criação anterior falhou no meio do caminho.
+                const { data: newProfile } = await supabase.from('profiles').upsert({
                     id: userId,
                     name: email.split('@')[0] || 'Novo Usuário',
                     role: 'USER',
                     email: email,
                     status: 'ACTIVE'
-                }).select().single();
+                }, { onConflict: 'id' }).select().single();
                 
                 userToSet = {
                     id: userId,
@@ -354,12 +356,25 @@ const App: React.FC = () => {
     }
   };
 
-  const handleAddExpense = async (exp: Expense) => {
+  const handleAddExpense = async (exp: Expense, rec?: RecurringExpense) => {
     if (!session?.user) return;
+    
+    // 1. Add normal expense
     const payload = { ...exp, user_id: session.user.id };
-    const { data, error } = await supabase.from('expenses').upsert(payload).select().single();
-    if (!error && data) {
-      setExpenses(prev => [...prev.filter(e => e.id !== exp.id), data]);
+    const { data: expenseData, error: expenseError } = await supabase.from('expenses').upsert(payload).select().single();
+    
+    if (!expenseError && expenseData) {
+      setExpenses(prev => [...prev.filter(e => e.id !== exp.id), expenseData]);
+      
+      // 2. If there is a recurring expense config, add it too
+      if (rec) {
+         const recPayload = { ...rec, user_id: session.user.id };
+         const { data: recData } = await supabase.from('recurring_expenses').insert(recPayload).select().single();
+         if (recData) {
+             setRecurringExpenses(prev => [...prev, recData]);
+         }
+      }
+      
       setView('LIST'); 
     }
   };
@@ -397,6 +412,11 @@ const App: React.FC = () => {
     setCredits(prev => prev.filter(c => c.id !== id));
   };
 
+  const handleDeleteRecurring = async (id: string) => {
+    await supabase.from('recurring_expenses').delete().eq('id', id);
+    setRecurringExpenses(prev => prev.filter(r => r.id !== id));
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 text-blue-600">
@@ -432,6 +452,7 @@ const App: React.FC = () => {
             <NavButton target="DASHBOARD" icon={<LayoutDashboard size={18} />} label="Balanço" />
             <NavButton target="CREDIT_HISTORY" icon={<CreditCard size={18} />} label="Crédito" />
             <NavButton target="LIST" icon={<List size={18} />} label="Histórico" />
+            <NavButton target="RECURRING" icon={<Repeat size={18} />} label="Fixas" />
             <NavButton target="AI_ADVISOR" icon={<Sparkles size={18} />} label="IA" />
             
             <button 
@@ -464,6 +485,7 @@ const App: React.FC = () => {
            <NavButton target="DASHBOARD" icon={<LayoutDashboard size={18} />} label="Balanço Geral" />
            <NavButton target="CREDIT_HISTORY" icon={<CreditCard size={18} />} label="Dívidas e Crédito" />
            <NavButton target="LIST" icon={<List size={18} />} label="Histórico" />
+           <NavButton target="RECURRING" icon={<Repeat size={18} />} label="Contas Fixas" />
            <NavButton target="AI_ADVISOR" icon={<Sparkles size={18} />} label="IA Driver" />
            
            <button onClick={() => { setShowInstallGuide(true); setMobileMenuOpen(false); }} className="w-full flex items-center justify-center px-4 py-3 rounded-xl bg-indigo-50 text-indigo-600 font-bold mt-2">
@@ -500,6 +522,7 @@ const App: React.FC = () => {
         )}
         {view === 'ADD_ENTRY' && <ExpenseForm categories={categories} initialData={expenseToEdit} onAddExpense={handleAddExpense} onCancel={() => setView('LIST')} onAddCategory={(c) => setCategories([...categories, c])} onDeleteCategory={(c) => setCategories(categories.filter(x => x !== c))} />}
         {view === 'LIST' && <ExpenseList expenses={expenses} onDelete={handleDeleteExpense} onEdit={(e) => { setExpenseToEdit(e); setView('ADD_ENTRY'); }} />}
+        {view === 'RECURRING' && <RecurringList recurringExpenses={recurringExpenses} onDelete={handleDeleteRecurring} />}
         {view === 'AI_ADVISOR' && <AIAdvisor expenses={expenses} />}
         {view === 'CREDIT_HISTORY' && <CreditHistory credits={credits} onAddCredit={handleAddCredit} onDeleteCredit={handleDeleteCredit} onUpdateCredit={handleUpdateCredit} />}
         {view === 'ADMIN_PANEL' && currentUser?.role === 'ADMIN' && (
