@@ -76,7 +76,6 @@ const App: React.FC = () => {
   const fetchUsers = useCallback(async (signal?: AbortSignal) => {
     if (!isSupabaseConfigured) return;
     try {
-      // Added ordering to make list stable
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
@@ -188,8 +187,7 @@ const App: React.FC = () => {
                 status: 'ACTIVE'
             };
             
-            // SELF-HEALING: Se for o master admin, garante que a role no banco seja ADMIN
-            // Isso previne que erros de trigger deixem o admin sem permissão
+            // SELF-HEALING
             if (!profileData || profileData.role !== 'ADMIN') {
                  console.log("Auto-repair: Corrigindo permissões do Admin Mestre...");
                  await supabase.from('profiles').upsert({
@@ -200,8 +198,6 @@ const App: React.FC = () => {
                      status: 'ACTIVE'
                  }, { onConflict: 'id' });
             }
-
-            // Busca a lista de usuários
             fetchUsers(controller.signal);
 
         } else {
@@ -214,8 +210,6 @@ const App: React.FC = () => {
                     role: profileData.role as 'ADMIN' | 'USER',
                     status: profileData.status || 'ACTIVE'
                 };
-
-                // Se o banco diz que é ADMIN, busca a lista
                 if (profileData.role === 'ADMIN') {
                     fetchUsers(controller.signal);
                 }
@@ -293,28 +287,20 @@ const App: React.FC = () => {
 
     try {
         setLoading(true);
-
         const { data: authData, error: authError } = await supabase.auth.signUp({
             email: userToAdd.email,
             password: userToAdd.password,
-            options: {
-                data: {
-                    name: userToAdd.name,
-                }
-            }
+            options: { data: { name: userToAdd.name } }
         });
 
         if (authError) {
             let errorMessage = `Erro ao criar usuário: ${authError.message}`;
-            if (authError.message.includes('already registered')) {
-                errorMessage = `Este e-mail já está cadastrado. Por favor, use outro.`;
-            }
+            if (authError.message.includes('already registered')) errorMessage = `Este e-mail já está cadastrado.`;
             alert(errorMessage);
             return false;
         }
 
         if (authData.user) {
-            // Recarrega a lista após adicionar
             await fetchUsers(); 
             alert(`Usuário "${userToAdd.name}" criado com sucesso!`);
             return true;
@@ -333,7 +319,7 @@ const App: React.FC = () => {
 
   const handleDeleteUser = async (id: string) => {
     if (currentUser?.role !== 'ADMIN') return;
-    if (confirm('Tem certeza que deseja excluir este usuário? Esta ação não pode ser desfeita.')) {
+    if (confirm('Tem certeza que deseja excluir este usuário?')) {
         const { error } = await supabase.from('profiles').delete().eq('id', id);
         if (!error) fetchUsers(); 
     }
@@ -341,11 +327,7 @@ const App: React.FC = () => {
 
   const handleToggleUserStatus = async (id: string, newStatus: 'ACTIVE' | 'BLOCKED') => {
     if (currentUser?.role !== 'ADMIN') return;
-    if (id === currentUser?.id) {
-        alert("Você não pode bloquear a si mesmo.");
-        return;
-    }
-
+    if (id === currentUser?.id) return alert("Você não pode bloquear a si mesmo.");
     try {
         const { error } = await supabase.from('profiles').update({ status: newStatus }).eq('id', id);
         if (error) throw error;
@@ -358,62 +340,90 @@ const App: React.FC = () => {
   const handleAddExpense = async (exp: Expense, rec?: RecurringExpense) => {
     if (!session?.user) return;
     
-    // 1. Add normal expense
+    // Optimistic Update
     const payload = { ...exp, user_id: session.user.id };
+    setExpenses(prev => [...prev.filter(e => e.id !== exp.id), payload]);
+    setView('LIST'); 
+
+    // Background Save
     const { data: expenseData, error: expenseError } = await supabase.from('expenses').upsert(payload).select().single();
     
-    if (!expenseError && expenseData) {
-      setExpenses(prev => [...prev.filter(e => e.id !== exp.id), expenseData]);
+    if (expenseError) {
+        // Rollback on error (could handle more gracefully)
+        console.error("Erro ao salvar despesa:", expenseError);
+        fetchData(session.user.id, session.user.email);
+    }
       
-      // 2. If there is a recurring expense config, add it too
-      if (rec) {
+    if (rec) {
          const recPayload = { ...rec, user_id: session.user.id };
          const { data: recData } = await supabase.from('recurring_expenses').insert(recPayload).select().single();
          if (recData) {
              setRecurringExpenses(prev => [...prev, recData]);
          }
-      }
-      
-      setView('LIST'); 
     }
   };
 
   const handleDeleteExpense = async (id: string) => {
-    await supabase.from('expenses').delete().eq('id', id);
+    // Optimistic Delete
     setExpenses(prev => prev.filter(e => e.id !== id));
+    await supabase.from('expenses').delete().eq('id', id);
   };
 
   const handleAddEarning = async (ear: Earning) => {
     if (!session?.user) return;
-    const { data } = await supabase.from('earnings').insert({ ...ear, user_id: session.user.id }).select().single();
-    if (data) setEarnings(prev => [...prev, data]);
+    // Optimistic Update
+    const payload = { ...ear, user_id: session.user.id };
+    setEarnings(prev => [...prev, payload]);
+    
+    const { error } = await supabase.from('earnings').insert(payload).select().single();
+    if (error) {
+        console.error("Erro ao salvar ganho:", error);
+        setEarnings(prev => prev.filter(e => e.id !== payload.id));
+    }
   };
 
   const handleUpdateKm = async (entry: DailyKm) => {
     if (!session?.user) return;
-    const { data } = await supabase.from('daily_km').upsert({ ...entry, user_id: session.user.id }).select().single();
-    if (data) setKmEntries(prev => [...prev.filter(k => k.date !== entry.date), data]);
+    
+    // OPTIMISTIC UPDATE: Update UI instantly
+    setKmEntries(prev => {
+        // Remove existing entry for same date to avoid duplicates in local state
+        const others = prev.filter(k => k.date !== entry.date);
+        return [...others, entry];
+    });
+
+    const { data, error } = await supabase.from('daily_km').upsert({ ...entry, user_id: session.user.id }).select().single();
+    
+    if (error) {
+        console.error("Erro ao salvar KM:", error);
+        // We don't necessarily rollback here to avoid jarring user experience, but we log it.
+        // On next fetch, it would correct itself if save failed.
+    } else if (data) {
+        // Update with confirmed data from server (e.g. correct ID)
+        setKmEntries(prev => [...prev.filter(k => k.date !== entry.date), data]);
+    }
   };
 
   const handleAddCredit = async (c: CreditEntry) => {
     if (!session?.user) return;
-    const { data } = await supabase.from('credits').insert({ ...c, user_id: session.user.id }).select().single();
-    if (data) setCredits(prev => [...prev, data]);
+    const payload = { ...c, user_id: session.user.id };
+    setCredits(prev => [...prev, payload]);
+    await supabase.from('credits').insert(payload);
   };
 
   const handleUpdateCredit = async (c: CreditEntry) => {
-    await supabase.from('credits').update(c).eq('id', c.id);
     setCredits(prev => prev.map(item => item.id === c.id ? c : item));
+    await supabase.from('credits').update(c).eq('id', c.id);
   };
 
   const handleDeleteCredit = async (id: string) => {
-    await supabase.from('credits').delete().eq('id', id);
     setCredits(prev => prev.filter(c => c.id !== id));
+    await supabase.from('credits').delete().eq('id', id);
   };
 
   const handleDeleteRecurring = async (id: string) => {
-    await supabase.from('recurring_expenses').delete().eq('id', id);
     setRecurringExpenses(prev => prev.filter(r => r.id !== id));
+    await supabase.from('recurring_expenses').delete().eq('id', id);
   };
 
   if (loading) {

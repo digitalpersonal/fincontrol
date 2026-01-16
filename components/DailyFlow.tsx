@@ -41,20 +41,48 @@ const DailyFlow: React.FC<DailyFlowProps> = ({
   
   const today = new Date().toISOString().split('T')[0];
 
-  // Odometer Local State (fixes typing issue)
-  const [localStartKm, setLocalStartKm] = useState('');
-  const [localEndKm, setLocalEndKm] = useState('');
+  // Odometer Local State with LocalStorage Backup
+  const [localStartKm, setLocalStartKm] = useState(() => {
+    // 1. Tenta pegar do banco (props)
+    const entry = kmEntries.find(k => k.date === today);
+    if (entry?.startKm) return entry.startKm.toString();
+    
+    // 2. Se não tiver no banco, tenta pegar do rascunho local
+    return localStorage.getItem(`fincontrol_start_${today}`) || '';
+  });
 
+  const [localEndKm, setLocalEndKm] = useState(() => {
+    const entry = kmEntries.find(k => k.date === today);
+    if (entry?.endKm) return entry.endKm.toString();
+    return localStorage.getItem(`fincontrol_end_${today}`) || '';
+  });
+
+  // Sync with DB changes, but prioritize local typing if DB is lagging
   useEffect(() => {
     const entry = kmEntries.find(k => k.date === today);
     if (entry) {
-        setLocalStartKm(entry.startKm ? entry.startKm.toString() : '');
-        setLocalEndKm(entry.endKm ? entry.endKm.toString() : '');
-    } else {
-        setLocalStartKm('');
-        setLocalEndKm('');
+        if (entry.startKm) {
+            setLocalStartKm(entry.startKm.toString());
+            // Update backup
+            localStorage.setItem(`fincontrol_start_${today}`, entry.startKm.toString());
+        }
+        if (entry.endKm) {
+            setLocalEndKm(entry.endKm.toString());
+            // Update backup
+            localStorage.setItem(`fincontrol_end_${today}`, entry.endKm.toString());
+        }
     }
   }, [kmEntries, today]);
+
+  const handleStartKmChange = (val: string) => {
+      setLocalStartKm(val);
+      localStorage.setItem(`fincontrol_start_${today}`, val);
+  };
+
+  const handleEndKmChange = (val: string) => {
+      setLocalEndKm(val);
+      localStorage.setItem(`fincontrol_end_${today}`, val);
+  };
 
   const handleKmBlur = () => {
     const start = parseFloat(localStartKm) || 0;
@@ -217,7 +245,7 @@ const DailyFlow: React.FC<DailyFlowProps> = ({
              <input 
                 type="number" 
                 value={localStartKm}
-                onChange={(e) => setLocalStartKm(e.target.value)}
+                onChange={(e) => handleStartKmChange(e.target.value)}
                 onBlur={handleKmBlur}
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg p-2 text-white font-mono focus:ring-1 focus:ring-blue-500 outline-none"
                 placeholder="00000"
@@ -228,7 +256,7 @@ const DailyFlow: React.FC<DailyFlowProps> = ({
              <input 
                 type="number" 
                 value={localEndKm}
-                onChange={(e) => setLocalEndKm(e.target.value)}
+                onChange={(e) => handleEndKmChange(e.target.value)}
                 onBlur={handleKmBlur}
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg p-2 text-white font-mono focus:ring-1 focus:ring-blue-500 outline-none"
                 placeholder="00000"
