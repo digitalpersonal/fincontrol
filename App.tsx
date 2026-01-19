@@ -4,6 +4,7 @@ import { Expense, Earning, DailyKm, CreditEntry, User, ViewState, DEFAULT_CATEGO
 import Dashboard from './components/Dashboard';
 import ExpenseForm from './components/ExpenseForm';
 import ExpenseList from './components/ExpenseList';
+import EarningList from './components/EarningList';
 import RecurringList from './components/RecurringList';
 import AIAdvisor from './components/AIAdvisor';
 import DailyFlow from './components/DailyFlow';
@@ -21,14 +22,12 @@ const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   
-  // PWA Install State
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
 
   const isMounted = useRef(true);
   const fetchController = useRef<AbortController | null>(null);
 
-  // Data States
   const [categories, setCategories] = useState<string[]>(() => {
     const saved = localStorage.getItem('expenseCategories');
     return saved ? JSON.parse(saved) : DEFAULT_CATEGORIES;
@@ -47,10 +46,11 @@ const App: React.FC = () => {
   const [allUsers, setAllUsers] = useState<User[]>([]);
 
   const [view, setView] = useState<ViewState>('DAILY_FLOW');
+  const [historyTab, setHistoryTab] = useState<'EXPENSES' | 'EARNINGS'>('EXPENSES');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [expenseToEdit, setExpenseToEdit] = useState<Expense | null>(null);
+  const [earningToEdit, setEarningToEdit] = useState<Earning | null>(null);
 
-  // Persist categories changes
   useEffect(() => {
     localStorage.setItem('expenseCategories', JSON.stringify(categories));
   }, [categories]);
@@ -59,18 +59,13 @@ const App: React.FC = () => {
     localStorage.setItem('earningCategories', JSON.stringify(earningCategories));
   }, [earningCategories]);
 
-  // PWA Install Event Listener
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
       setDeferredPrompt(e);
     };
-
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    };
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
   }, []);
 
   const fetchUsers = useCallback(async (signal?: AbortSignal) => {
@@ -82,11 +77,7 @@ const App: React.FC = () => {
         .order('name', { ascending: true })
         .abortSignal(signal as any);
 
-      if (error) {
-        if (error.message.includes('abort') || error.code === '20') return;
-        console.error("Erro crítico ao buscar usuários (verifique RLS policies):", error);
-        throw error;
-      }
+      if (error) return;
       if (data && isMounted.current) {
         setAllUsers(data.map(p => ({
           id: p.id,
@@ -97,323 +88,110 @@ const App: React.FC = () => {
           status: p.status || 'ACTIVE'
         })));
       }
-    } catch (err: any) {
-      if (err.name !== 'AbortError' && !err.message?.includes('aborted')) {
-        console.warn("Erro ao buscar usuários:", err);
-      }
-    }
+    } catch (err) {}
   }, []);
 
   const fetchData = useCallback(async (userId: string, email: string) => {
     if (!isSupabaseConfigured) {
-      console.warn("Supabase não está configurado. Verifique as variáveis de ambiente.");
       setLoading(false);
       return;
     }
 
-    if (fetchController.current) {
-        fetchController.current.abort();
-    }
+    if (fetchController.current) fetchController.current.abort();
     const controller = new AbortController();
     fetchController.current = controller;
-    
     setLoading(true);
 
     try {
         const isMasterAdmin = email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+        const { data: profileData } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle().abortSignal(controller.signal as any);
 
-        // 1. Fetch Profile First to check STATUS
-        const { data: profileData, error: profileError } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', userId)
-            .maybeSingle()
-            .abortSignal(controller.signal as any);
-
-        if (controller.signal.aborted || !isMounted.current) return;
-
-        // CHECK IF BLOCKED
         if (profileData && profileData.status === 'BLOCKED') {
             await supabase.auth.signOut();
-            alert("ACESSO SUSPENSO: Sua conta está bloqueada por pendência financeira. Entre em contato com o suporte.");
+            alert("ACESSO SUSPENSO: Conta bloqueada.");
             return;
         }
 
-        // Conditionally define promises for financial data
-        let expensesPromise = Promise.resolve({ data: [] });
-        let earningsPromise = Promise.resolve({ data: [] });
-        let kmPromise = Promise.resolve({ data: [] });
-        let creditsPromise = Promise.resolve({ data: [] });
-        let recurringPromise = Promise.resolve({ data: [] });
-
-        // Fetch data based on context
-        expensesPromise = supabase.from('expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
-        earningsPromise = supabase.from('earnings').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
-        kmPromise = supabase.from('daily_km').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
-        creditsPromise = supabase.from('credits').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
-        recurringPromise = supabase.from('recurring_expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any);
-
-        const [
-            expensesResponse,
-            earningsResponse,
-            kmResponse,
-            creditsResponse,
-            recurringResponse
-        ] = await Promise.all([
-            expensesPromise,
-            earningsPromise,
-            kmPromise,
-            creditsPromise,
-            recurringPromise
+        const [exp, ear, km, cre, rec] = await Promise.all([
+            supabase.from('expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
+            supabase.from('earnings').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
+            supabase.from('daily_km').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
+            supabase.from('credits').select('*').eq('user_id', userId).abortSignal(controller.signal as any),
+            supabase.from('recurring_expenses').select('*').eq('user_id', userId).abortSignal(controller.signal as any)
         ]);
 
-        if (controller.signal.aborted || !isMounted.current) return;
+        if (controller.signal.aborted) return;
 
-        setExpenses(expensesResponse.data || []);
-        setEarnings(earningsResponse.data || []);
-        setKmEntries(kmResponse.data || []);
-        setCredits(creditsResponse.data || []);
-        setRecurringExpenses(recurringResponse.data || []);
+        setExpenses(exp.data || []);
+        setEarnings(ear.data || []);
+        setKmEntries(km.data || []);
+        setCredits(cre.data || []);
+        setRecurringExpenses(rec.data || []);
         
-        let userToSet: User;
-
         if (isMasterAdmin) {
-            userToSet = {
-                id: userId,
-                name: profileData?.name || email.split('@')[0] || 'Admin Mestre', 
-                email: email,
-                password: '',
-                role: 'ADMIN',
-                status: 'ACTIVE'
-            };
-            
-            // SELF-HEALING
             if (!profileData || profileData.role !== 'ADMIN') {
-                 console.log("Auto-repair: Corrigindo permissões do Admin Mestre...");
-                 await supabase.from('profiles').upsert({
-                     id: userId,
-                     email: email,
-                     name: userToSet.name,
-                     role: 'ADMIN',
-                     status: 'ACTIVE'
-                 }, { onConflict: 'id' });
+                 await supabase.from('profiles').upsert({ id: userId, email, name: email.split('@')[0], role: 'ADMIN', status: 'ACTIVE' });
             }
             fetchUsers(controller.signal);
-
-        } else {
-            if (profileData) {
-                userToSet = {
-                    id: userId,
-                    name: profileData.name,
-                    email: email,
-                    password: '',
-                    role: profileData.role as 'ADMIN' | 'USER',
-                    status: profileData.status || 'ACTIVE'
-                };
-                if (profileData.role === 'ADMIN') {
-                    fetchUsers(controller.signal);
-                }
-            } else {
-                userToSet = {
-                    id: userId,
-                    name: email.split('@')[0],
-                    email: email,
-                    password: '',
-                    role: 'USER',
-                    status: 'ACTIVE'
-                };
-            }
+            setCurrentUser({ id: userId, email, name: profileData?.name || 'Admin', role: 'ADMIN', status: 'ACTIVE', password: '' });
+        } else if (profileData) {
+            setCurrentUser({ id: userId, email, name: profileData.name, role: profileData.role as any, status: profileData.status as any, password: '' });
+            if (profileData.role === 'ADMIN') fetchUsers(controller.signal);
         }
-        
-        if (isMounted.current) {
-            setCurrentUser(userToSet);
-        }
-
-    } catch (err: any) {
-        if (err.name !== 'AbortError' && !err.message?.includes('aborted')) {
-            console.error("Erro ao carregar dados do usuário:", err);
-        }
-    } finally {
-        if (isMounted.current && !controller.signal.aborted) {
-            setLoading(false);
-        }
+    } catch (err) {} finally {
+        if (isMounted.current) setLoading(false);
     }
-}, [fetchUsers]);
-
+  }, [fetchUsers]);
 
   useEffect(() => {
-    isMounted.current = true;
-    
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      if (!isMounted.current) return;
-      
       setSession(newSession);
-      
-      if (newSession?.user) {
-        fetchData(newSession.user.id, newSession.user.email || '');
-      } else {
-        setCurrentUser(null);
-        setExpenses([]);
-        setEarnings([]);
-        setKmEntries([]);
-        setCredits([]);
-        setRecurringExpenses([]);
-        setAllUsers([]);
-        setLoading(false);
-      }
+      if (newSession?.user) fetchData(newSession.user.id, newSession.user.email || '');
+      else { setLoading(false); setCurrentUser(null); }
     });
-
-    return () => {
-      isMounted.current = false;
-      if (fetchController.current) {
-        fetchController.current.abort();
-      }
-      subscription.unsubscribe();
-    };
+    return () => subscription.unsubscribe();
   }, [fetchData]);
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    setCurrentUser(null);
-    setMobileMenuOpen(false);
-    setView('DAILY_FLOW');
-  };
-
-  const handleAddUser = async (userToAdd: User): Promise<boolean> => {
-    if (currentUser?.role !== 'ADMIN') {
-        alert("Você não tem permissão para adicionar usuários.");
-        return false;
-    }
-
-    try {
-        setLoading(true);
-        const { data: authData, error: authError } = await supabase.auth.signUp({
-            email: userToAdd.email,
-            password: userToAdd.password,
-            options: { data: { name: userToAdd.name } }
-        });
-
-        if (authError) {
-            let errorMessage = `Erro ao criar usuário: ${authError.message}`;
-            if (authError.message.includes('already registered')) errorMessage = `Este e-mail já está cadastrado.`;
-            alert(errorMessage);
-            return false;
-        }
-
-        if (authData.user) {
-            await fetchUsers(); 
-            alert(`Usuário "${userToAdd.name}" criado com sucesso!`);
-            return true;
-        } else {
-            alert(`Usuário "${userToAdd.name}" registrado! Verifique o e-mail.`);
-            return true;
-        }
-    } catch (err) {
-        console.error("Unexpected error during user creation:", err);
-        alert("Ocorreu um erro inesperado ao criar o usuário.");
-        return false;
-    } finally {
-        setLoading(false);
-    }
-  };
-
-  const handleDeleteUser = async (id: string) => {
-    if (currentUser?.role !== 'ADMIN') return;
-    if (confirm('Tem certeza que deseja excluir este usuário?')) {
-        const { error } = await supabase.from('profiles').delete().eq('id', id);
-        if (!error) fetchUsers(); 
-    }
-  };
-
-  const handleToggleUserStatus = async (id: string, newStatus: 'ACTIVE' | 'BLOCKED') => {
-    if (currentUser?.role !== 'ADMIN') return;
-    if (id === currentUser?.id) return alert("Você não pode bloquear a si mesmo.");
-    try {
-        const { error } = await supabase.from('profiles').update({ status: newStatus }).eq('id', id);
-        if (error) throw error;
-        setAllUsers(prev => prev.map(u => u.id === id ? { ...u, status: newStatus } : u));
-    } catch (error: any) {
-        alert("Erro ao alterar status do usuário.");
-    }
-  };
+  const handleLogout = async () => { await supabase.auth.signOut(); setView('DAILY_FLOW'); };
 
   const handleAddExpense = async (exp: Expense, rec?: RecurringExpense) => {
     if (!session?.user) return;
-    
-    // Optimistic Update
     const payload = { ...exp, user_id: session.user.id };
     setExpenses(prev => [...prev.filter(e => e.id !== exp.id), payload]);
     setView('LIST'); 
-
-    // Background Save
-    const { data: expenseData, error: expenseError } = await supabase.from('expenses').upsert(payload).select().single();
-    
-    if (expenseError) {
-        // Rollback on error (could handle more gracefully)
-        console.error("Erro ao salvar despesa:", expenseError);
-        fetchData(session.user.id, session.user.email);
-    }
-      
-    if (rec) {
-         const recPayload = { ...rec, user_id: session.user.id };
-         const { data: recData } = await supabase.from('recurring_expenses').insert(recPayload).select().single();
-         if (recData) {
-             setRecurringExpenses(prev => [...prev, recData]);
-         }
-    }
+    await supabase.from('expenses').upsert(payload);
+    if (rec) await supabase.from('recurring_expenses').insert({ ...rec, user_id: session.user.id });
   };
 
   const handleDeleteExpense = async (id: string) => {
-    // Optimistic Delete
     setExpenses(prev => prev.filter(e => e.id !== id));
     await supabase.from('expenses').delete().eq('id', id);
   };
 
   const handleAddEarning = async (ear: Earning) => {
     if (!session?.user) return;
-    // Optimistic Update
     const payload = { ...ear, user_id: session.user.id };
-    setEarnings(prev => [...prev, payload]);
-    
-    const { error } = await supabase.from('earnings').insert(payload).select().single();
-    if (error) {
-        console.error("Erro ao salvar ganho:", error);
-        setEarnings(prev => prev.filter(e => e.id !== payload.id));
-    }
+    setEarnings(prev => [...prev.filter(e => e.id !== ear.id), payload]);
+    await supabase.from('earnings').upsert(payload);
+    setEarningToEdit(null);
+  };
+
+  const handleDeleteEarning = async (id: string) => {
+    setEarnings(prev => prev.filter(e => e.id !== id));
+    await supabase.from('earnings').delete().eq('id', id);
   };
 
   const handleUpdateKm = async (entry: DailyKm) => {
     if (!session?.user) return;
-    
-    // OPTIMISTIC UPDATE: Update UI instantly
-    setKmEntries(prev => {
-        // Remove existing entry for same date to avoid duplicates in local state
-        const others = prev.filter(k => k.date !== entry.date);
-        return [...others, entry];
-    });
-
-    const { data, error } = await supabase.from('daily_km').upsert({ ...entry, user_id: session.user.id }).select().single();
-    
-    if (error) {
-        console.error("Erro ao salvar KM:", error);
-        // We don't necessarily rollback here to avoid jarring user experience, but we log it.
-        // On next fetch, it would correct itself if save failed.
-    } else if (data) {
-        // Update with confirmed data from server (e.g. correct ID)
-        setKmEntries(prev => [...prev.filter(k => k.date !== entry.date), data]);
-    }
+    setKmEntries(prev => [...prev.filter(k => k.date !== entry.date), entry]);
+    await supabase.from('daily_km').upsert({ ...entry, user_id: session.user.id });
   };
 
   const handleAddCredit = async (c: CreditEntry) => {
     if (!session?.user) return;
     const payload = { ...c, user_id: session.user.id };
-    setCredits(prev => [...prev, payload]);
-    await supabase.from('credits').insert(payload);
-  };
-
-  const handleUpdateCredit = async (c: CreditEntry) => {
-    setCredits(prev => prev.map(item => item.id === c.id ? c : item));
-    await supabase.from('credits').update(c).eq('id', c.id);
+    setCredits(prev => [...prev.filter(i => i.id !== c.id), payload]);
+    await supabase.from('credits').upsert(payload);
   };
 
   const handleDeleteCredit = async (id: string) => {
@@ -421,89 +199,32 @@ const App: React.FC = () => {
     await supabase.from('credits').delete().eq('id', id);
   };
 
-  const handleDeleteRecurring = async (id: string) => {
-    setRecurringExpenses(prev => prev.filter(r => r.id !== id));
-    await supabase.from('recurring_expenses').delete().eq('id', id);
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 text-blue-600">
-        <Loader2 className="animate-spin mb-4" size={48} />
-        <p className="font-bold animate-pulse">Sincronizando dados...</p>
-      </div>
-    );
-  }
-
+  if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="animate-spin text-blue-600" size={48} /></div>;
   if (!session) return <Login />;
 
-  const NavButton: React.FC<{ target: ViewState; icon: React.ReactNode; label: string }> = ({ target, icon, label }) => (
-    <button
-      onClick={() => { setView(target); setMobileMenuOpen(false); }}
-      className={`flex items-center px-4 py-3 rounded-xl transition-all w-full md:w-auto ${view === target ? 'bg-blue-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-100'}`}
-    >
-      {icon} <span className="ml-2 font-medium">{label}</span>
-    </button>
-  );
-
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900 font-sans pb-32 md:pb-12">
-      <header className="sticky top-0 z-30 bg-white border-b border-gray-200 shadow-sm print:hidden">
-        <div className="max-w-5xl mx-auto px-4 h-16 flex justify-between items-center">
-          <div className="flex items-center gap-2 cursor-pointer" onClick={() => setView('DAILY_FLOW')}>
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">D</div>
-            <span className="text-xl font-black text-gray-800 hidden sm:inline">FinControl<span className="text-blue-600">AI</span></span>
-          </div>
-          
-          <nav className="hidden md:flex space-x-2 items-center">
-            {currentUser?.role === 'ADMIN' && <NavButton target="ADMIN_PANEL" icon={<ShieldCheck size={18} />} label="Gestão" />}
-            <NavButton target="DAILY_FLOW" icon={<Wallet size={18} />} label="Diário" />
-            <NavButton target="DASHBOARD" icon={<LayoutDashboard size={18} />} label="Balanço" />
-            <NavButton target="CREDIT_HISTORY" icon={<CreditCard size={18} />} label="Crédito" />
-            <NavButton target="LIST" icon={<List size={18} />} label="Histórico" />
-            <NavButton target="RECURRING" icon={<Repeat size={18} />} label="Fixas" />
-            <NavButton target="AI_ADVISOR" icon={<Sparkles size={18} />} label="IA" />
-            
-            <button 
-                onClick={() => setShowInstallGuide(true)}
-                className="flex items-center px-3 py-2 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 transition ml-2"
-                title="Instalar App"
-            >
-                <Download size={18} className="mr-1"/> <span className="text-sm font-bold">App</span>
-            </button>
-
-            <div className="h-8 w-px bg-gray-200 mx-2"></div>
-            <button onClick={handleLogout} className="p-3 text-gray-400 hover:text-red-600 rounded-xl transition">
-                <LogOut size={20} />
-            </button>
-          </nav>
-
-          <div className="flex items-center gap-2 md:hidden">
-             <span className="text-xs font-bold text-blue-600">{currentUser?.role === 'ADMIN' ? 'ADMIN' : currentUser?.name}</span>
-             <button className="p-2" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
-                {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
-             </button>
-          </div>
+    <div className="min-h-screen bg-gray-50 pb-32">
+      <header className="sticky top-0 z-30 bg-white border-b h-16 flex items-center px-4 justify-between">
+        <div className="flex items-center gap-2 cursor-pointer" onClick={() => setView('DAILY_FLOW')}>
+          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">D</div>
+          <span className="font-black text-gray-800">FinControl<span className="text-blue-600">AI</span></span>
         </div>
+        <nav className="hidden md:flex gap-2">
+          {currentUser?.role === 'ADMIN' && <button onClick={() => setView('ADMIN_PANEL')} className="px-3 py-2 text-sm font-medium">Gestão</button>}
+          <button onClick={() => setView('DAILY_FLOW')} className="px-3 py-2 text-sm font-medium">Diário</button>
+          <button onClick={() => setView('LIST')} className="px-3 py-2 text-sm font-medium">Histórico</button>
+          <button onClick={() => setView('CREDIT_HISTORY')} className="px-3 py-2 text-sm font-medium">Crédito</button>
+          <button onClick={handleLogout} className="p-2 text-gray-400 hover:text-red-600"><LogOut size={20} /></button>
+        </nav>
+        <button className="md:hidden" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}><Menu /></button>
       </header>
 
       {mobileMenuOpen && (
-        <div className="md:hidden bg-white border-b p-4 space-y-2 fixed w-full z-40 shadow-xl animate-fade-in">
-           {currentUser?.role === 'ADMIN' && <NavButton target="ADMIN_PANEL" icon={<ShieldCheck size={18} />} label="Administração" />}
-           <NavButton target="DAILY_FLOW" icon={<Wallet size={18} />} label="Fluxo do Dia" />
-           <NavButton target="DASHBOARD" icon={<LayoutDashboard size={18} />} label="Balanço Geral" />
-           <NavButton target="CREDIT_HISTORY" icon={<CreditCard size={18} />} label="Dívidas e Crédito" />
-           <NavButton target="LIST" icon={<List size={18} />} label="Histórico" />
-           <NavButton target="RECURRING" icon={<Repeat size={18} />} label="Contas Fixas" />
-           <NavButton target="AI_ADVISOR" icon={<Sparkles size={18} />} label="IA Driver" />
-           
-           <button onClick={() => { setShowInstallGuide(true); setMobileMenuOpen(false); }} className="w-full flex items-center justify-center px-4 py-3 rounded-xl bg-indigo-50 text-indigo-600 font-bold mt-2">
-               <Download size={18} className="mr-2" /> Instalar Aplicativo
-           </button>
-
-           <button onClick={handleLogout} className="w-full flex items-center justify-center px-4 py-3 rounded-xl bg-red-50 text-red-600 font-bold mt-2">
-               <LogOut size={18} className="mr-2" /> Sair
-           </button>
+        <div className="md:hidden bg-white border-b p-4 space-y-2">
+           <button onClick={() => { setView('DAILY_FLOW'); setMobileMenuOpen(false); }} className="w-full text-left py-2 font-bold">Diário</button>
+           <button onClick={() => { setView('LIST'); setMobileMenuOpen(false); }} className="w-full text-left py-2 font-bold">Histórico</button>
+           <button onClick={() => { setView('CREDIT_HISTORY'); setMobileMenuOpen(false); }} className="w-full text-left py-2 font-bold">Crédito</button>
+           <button onClick={handleLogout} className="w-full text-left py-2 text-red-600 font-bold">Sair</button>
         </div>
       )}
 
@@ -511,78 +232,38 @@ const App: React.FC = () => {
         {view === 'DASHBOARD' && <Dashboard expenses={expenses} earnings={earnings} />}
         {view === 'DAILY_FLOW' && (
             <DailyFlow 
-                onAddEarning={handleAddEarning} 
-                onAddExpense={handleAddExpense} 
-                onUpdateKm={handleUpdateKm} 
-                expenses={expenses} 
-                earnings={earnings} 
-                kmEntries={kmEntries}
-                expenseCategories={categories}
-                earningCategories={earningCategories}
-                onAddCategory={(type, cat) => {
-                    if (type === 'EXPENSE') setCategories([...categories, cat]);
-                    else setEarningCategories([...earningCategories, cat]);
-                }}
-                onDeleteCategory={(type, cat) => {
-                    if (type === 'EXPENSE') setCategories(categories.filter(x => x !== cat));
-                    else setEarningCategories(earningCategories.filter(x => x !== cat));
-                }}
+                onAddEarning={handleAddEarning} onAddExpense={handleAddExpense} onUpdateKm={handleUpdateKm} 
+                expenses={expenses} earnings={earnings} kmEntries={kmEntries}
+                expenseCategories={categories} earningCategories={earningCategories}
+                onAddCategory={(t, c) => t === 'EXPENSE' ? setCategories([...categories, c]) : setEarningCategories([...earningCategories, c])}
+                onDeleteCategory={(t, c) => t === 'EXPENSE' ? setCategories(categories.filter(x => x !== c)) : setEarningCategories(earningCategories.filter(x => x !== c))}
             />
         )}
-        {view === 'ADD_ENTRY' && <ExpenseForm categories={categories} initialData={expenseToEdit} onAddExpense={handleAddExpense} onCancel={() => setView('LIST')} onAddCategory={(c) => setCategories([...categories, c])} onDeleteCategory={(c) => setCategories(categories.filter(x => x !== c))} />}
-        {view === 'LIST' && <ExpenseList expenses={expenses} onDelete={handleDeleteExpense} onEdit={(e) => { setExpenseToEdit(e); setView('ADD_ENTRY'); }} />}
-        {view === 'RECURRING' && <RecurringList recurringExpenses={recurringExpenses} onDelete={handleDeleteRecurring} />}
-        {view === 'AI_ADVISOR' && <AIAdvisor expenses={expenses} />}
-        {view === 'CREDIT_HISTORY' && <CreditHistory credits={credits} onAddCredit={handleAddCredit} onDeleteCredit={handleDeleteCredit} onUpdateCredit={handleUpdateCredit} />}
-        {view === 'ADMIN_PANEL' && currentUser?.role === 'ADMIN' && (
-          <AdminPanel 
-            users={allUsers} 
-            onAddUser={handleAddUser} 
-            onDeleteUser={handleDeleteUser} 
-            onToggleStatus={handleToggleUserStatus} 
-            onRefresh={() => fetchUsers()}
-          />
-        )}
-
-        <footer className="mt-20 pt-10 border-t border-gray-200 pb-16">
-            <div className="text-center flex flex-col items-center justify-center space-y-2">
-                <p className="text-xs md:text-sm font-semibold text-gray-600">
-                    &copy; {new Date().getFullYear()} FinControl AI. Todos os direitos reservados.
-                </p>
-                <div className="h-px w-16 bg-gray-200"></div>
-                <p className="text-[10px] md:text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Desenvolvido por Multiplus - Sistemas Inteligentes
-                </p>
-                <p className="text-[10px] md:text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Silvio T. de Sá Filho
-                </p>
+        {view === 'ADD_ENTRY' && <ExpenseForm categories={categories} initialData={expenseToEdit} onAddExpense={handleAddExpense} onCancel={() => setView('LIST')} onAddCategory={c => setCategories([...categories, c])} onDeleteCategory={c => setCategories(categories.filter(x => x !== c))} />}
+        {view === 'LIST' && (
+          <div className="space-y-6">
+            <div className="flex p-1 bg-gray-200 rounded-xl w-fit">
+              <button onClick={() => setHistoryTab('EXPENSES')} className={`px-6 py-2 rounded-lg text-sm font-bold ${historyTab === 'EXPENSES' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500'}`}>Despesas</button>
+              <button onClick={() => setHistoryTab('EARNINGS')} className={`px-6 py-2 rounded-lg text-sm font-bold ${historyTab === 'EARNINGS' ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-500'}`}>Ganhos</button>
             </div>
-        </footer>
+            {historyTab === 'EXPENSES' ? 
+              <ExpenseList expenses={expenses} onDelete={handleDeleteExpense} onEdit={e => { setExpenseToEdit(e); setView('ADD_ENTRY'); }} /> :
+              <EarningList earnings={earnings} onDelete={handleDeleteEarning} onEdit={e => { setEarningToEdit(e); setView('DAILY_FLOW'); }} />
+            }
+          </div>
+        )}
+        {view === 'CREDIT_HISTORY' && <CreditHistory credits={credits} onAddCredit={handleAddCredit} onDeleteCredit={handleDeleteCredit} onUpdateCredit={handleAddCredit} />}
+        {view === 'ADMIN_PANEL' && <AdminPanel users={allUsers} onAddUser={() => Promise.resolve(true)} onDeleteUser={() => {}} onToggleStatus={() => {}} onRefresh={() => fetchUsers()} />}
       </main>
 
-      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t flex justify-around py-3 z-40 shadow-2xl print:hidden">
-        <button onClick={() => setView('DAILY_FLOW')} className={`flex flex-col items-center ${view === 'DAILY_FLOW' ? 'text-blue-600' : 'text-gray-400'}`}>
-          <Wallet size={24} /><span className="text-[10px] font-bold mt-1">Hoje</span>
-        </button>
-        <button onClick={() => setView('CREDIT_HISTORY')} className={`flex flex-col items-center ${view === 'CREDIT_HISTORY' ? 'text-blue-600' : 'text-gray-400'}`}>
-          <CreditCard size={24} /><span className="text-[10px] font-bold mt-1">Crédito</span>
-        </button>
-        <button onClick={() => { setExpenseToEdit(null); setView('ADD_ENTRY'); }} className="bg-blue-600 text-white rounded-full p-3 -mt-8 shadow-xl active:scale-95 transition">
-          <Plus size={32} />
-        </button>
-        <button onClick={() => setView('DASHBOARD')} className={`flex flex-col items-center ${view === 'DASHBOARD' ? 'text-blue-600' : 'text-gray-400'}`}>
-          <LayoutDashboard size={24} /><span className="text-[10px] font-bold mt-1">Balanço</span>
-        </button>
-        <button onClick={() => setView('LIST')} className={`flex flex-col items-center ${view === 'LIST' ? 'text-blue-600' : 'text-gray-400'}`}>
-            <List size={24} /><span className="text-[10px] font-bold mt-1">Lista</span>
-        </button>
+      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t flex justify-around py-3">
+        <button onClick={() => setView('DAILY_FLOW')} className={view === 'DAILY_FLOW' ? 'text-blue-600' : 'text-gray-400'}><Wallet /></button>
+        <button onClick={() => setView('CREDIT_HISTORY')} className={view === 'CREDIT_HISTORY' ? 'text-blue-600' : 'text-gray-400'}><CreditCard /></button>
+        <button onClick={() => { setExpenseToEdit(null); setView('ADD_ENTRY'); }} className="bg-blue-600 text-white rounded-full p-3 -mt-8 shadow-lg"><Plus size={32} /></button>
+        <button onClick={() => setView('DASHBOARD')} className={view === 'DASHBOARD' ? 'text-blue-600' : 'text-gray-400'}><LayoutDashboard /></button>
+        <button onClick={() => setView('LIST')} className={view === 'LIST' ? 'text-blue-600' : 'text-gray-400'}><List /></button>
       </div>
-
-      <InstallGuide 
-        isOpen={showInstallGuide} 
-        onClose={() => setShowInstallGuide(false)} 
-        installPrompt={deferredPrompt} 
-      />
+      <InstallGuide isOpen={showInstallGuide} onClose={() => setShowInstallGuide(false)} installPrompt={deferredPrompt} />
     </div>
   );
 };
